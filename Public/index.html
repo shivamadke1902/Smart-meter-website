@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Live voltage, current, power, and energy readings.">
+    <title>Energy Monitor | Live Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+  </head>
+  <body>
+    <div class="page">
+      <header class="header">
+        <div class="header__top">
+          <p class="eyebrow">Energy Monitor</p>
+          <div class="header__actions" aria-label="Dashboard actions">
+            <button id="refreshBtn" class="btn" type="button">Refresh</button>
+          </div>
+        </div>
+        <h1>Energy Monitoring Dashboard</h1>
+        <div class="header__meta">
+          <p class="subhead">Live readings update every 2 seconds</p>
+          <div class="status" aria-live="polite">
+            <span id="statusDot" class="status__dot" aria-hidden="true"></span>
+            <span id="statusText" class="status__text">Connecting…</span>
+            <span class="status__sep" aria-hidden="true">•</span>
+            <span class="status__label">Last updated:</span>
+            <time id="lastUpdated" class="status__time" datetime="">—</time>
+          </div>
+        </div>
+      </header>
+
+      <main class="main">
+        <section id="data" class="panel" aria-labelledby="metrics-title" aria-live="polite">
+          <div class="panel__head">
+            <h2 id="metrics-title">Live Metrics</h2>
+            <p class="panel__hint" id="metricsHint">Waiting for first reading…</p>
+          </div>
+          <dl class="metrics">
+            <div class="metric">
+              <dt>Voltage</dt>
+              <dd><span id="voltage" class="value">—</span> <span class="unit">V</span></dd>
+            </div>
+            <div class="metric">
+              <dt>Current</dt>
+              <dd><span id="current" class="value">—</span> <span class="unit">A</span></dd>
+            </div>
+            <div class="metric">
+              <dt>Power</dt>
+              <dd><span id="power" class="value">—</span> <span class="unit">W</span></dd>
+            </div>
+            <div class="metric">
+              <dt>Energy</dt>
+              <dd><span id="energy" class="value">—</span> <span class="unit">kWh</span></dd>
+            </div>
+          </dl>
+          <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+        </section>
+
+        <section class="panel panel--chart" aria-labelledby="chart-title">
+          <div class="panel__head">
+            <h2 id="chart-title">Power Over Time</h2>
+            <p class="panel__hint">Last few samples (auto-updating)</p>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="metricsChart" aria-label="Line chart of power readings over time" role="img"></canvas>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <small>Data updates continuously while this page is open</small>
+      </footer>
+    </div>
+
+    <noscript>
+      <div class="noscript">This dashboard needs JavaScript enabled to show live data.</div>
+    </noscript>
+
+    <script src="script.js" defer></script>
+  </body>
+</html>
