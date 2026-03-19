@@ -13,7 +13,6 @@ const els = {
   status: document.querySelector(".status"),
   lastUpdated: document.getElementById("lastUpdated"),
   refreshBtn: document.getElementById("refreshBtn"),
-  resetBtn: document.getElementById("resetBtn"),
   metricsHint: document.getElementById("metricsHint"),
   toast: document.getElementById("toast"),
   chartCanvas: document.getElementById("metricsChart"),
@@ -346,28 +345,6 @@ function apiUrl(path) {
   }
   
   els.refreshBtn?.addEventListener("click", () => fetchOnce({ userInitiated: true }));
-  els.resetBtn?.addEventListener("click", async () => {
-    try {
-      const res = await fetch(apiUrl("/admin/reset-today"), { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      // Clear UI immediately
-      applyData({
-        voltage: null,
-        current: null,
-        power: null,
-        powerFactor: null,
-        todayEnergyKwh: null,
-        todayMaxDemandKw: null,
-        todayCost: null,
-        lastOutage: null,
-        lastOutageDuration: 0,
-      });
-      updateLastUpdated(null);
-      showToast("Today’s values reset.");
-    } catch (e) {
-      showToast("Couldn’t reset. Check server.");
-    }
-  });
   
   // Initial load + polling
   initChart();
@@ -377,3 +354,5 @@ function apiUrl(path) {
   window.setInterval(fetchOnce, 2000);
   window.setInterval(fetchWeek, 15000);
   startStaleWatcher();
+
+

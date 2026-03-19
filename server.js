@@ -149,6 +149,25 @@ function clampNumber(n) {
   return Number.isFinite(x) ? x : null;
 }
 
+function parseIncomingPayload(body) {
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    return body;
+  }
+
+  if (typeof body === "string") {
+    const trimmed = body.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 function readHistory() {
   try {
     if (!fs.existsSync(HISTORY_FILE)) return [];
@@ -193,7 +212,9 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: false }));
+app.use(express.text({ type: "*/*", limit: "100kb" }));
 
 app.get("/", (req, res) => {
   res.sendFile(INDEX_FILE);
@@ -204,7 +225,11 @@ app.get("/health", (req, res) => {
 });
 
 app.post("/api/data", (req, res) => {
-  const data = req.body;
+  const data = parseIncomingPayload(req.body);
+  if (!data) {
+    console.warn("Rejected /api/data payload:", req.headers["content-type"] || "unknown-content-type");
+    return res.status(400).json({ ok: false, error: "Invalid JSON payload" });
+  }
 
   // Only accept reasonable outage durations (e.g. ignore obviously bad values)
   const rawOutage = Number(data.outageDuration);
