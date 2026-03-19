@@ -6,12 +6,26 @@ const path = require("path");
 const { Pool } = require("pg");
 
 const app = express();
-app.use(express.static(path.join(__dirname, "Public"))); // folder with index.html, script.js, style.css
+const STATIC_DIR = __dirname;
+const INDEX_FILE = path.join(STATIC_DIR, "index.html");
 
+app.use(express.static(STATIC_DIR, { index: false }));
 const DATA_DIR = path.join(__dirname, "data");
 const HISTORY_FILE = path.join(DATA_DIR, "history.json");
 
 const DATABASE_URL = process.env.DATABASE_URL;
+const PORT = Number(process.env.PORT) || 3000;
+const ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS ||
+    [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://shivamadke1902.github.io",
+    ].join(","))
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 const pool = DATABASE_URL
   ? new Pool({
       connectionString: DATABASE_URL,
@@ -164,7 +178,30 @@ let lastSampleAtMs = 0;
 let lastOutage = null;
 let lastOutageDuration = 0;
 
+app.use((req, res, next) => {
+  const origin = req.get("origin");
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.sendFile(INDEX_FILE);
+});
+
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
 
 app.post("/api/data", (req, res) => {
   const data = req.body;
@@ -372,8 +409,8 @@ app.get("/stats/week", (req, res) => {
   })();
 });
 
-app.listen(3000, "0.0.0.0", () => {
-  console.log("Server running on http://0.0.0.0:3000");
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
 
 // Initialize DB (optional) and hydrate in-memory history

@@ -19,6 +19,17 @@ const els = {
   chartCanvas: document.getElementById("metricsChart"),
   weekChartCanvas: document.getElementById("weekChart"),
 };
+const apiBaseMeta = document.querySelector('meta[name="api-base"]');
+const configuredApiBase = apiBaseMeta?.content?.trim() || "";
+const API_BASE =
+  configuredApiBase && !configuredApiBase.includes("YOUR-RENDER-SERVICE")
+    ? configuredApiBase.replace(/\/+$/, "")
+    : window.location.origin;
+
+function apiUrl(path) {
+  return `${API_BASE}${path}`;
+}
+
   console.log("dashboard script loaded");
   let lastOkAt = 0;
   let lastReadingTs = 0;
@@ -262,7 +273,7 @@ const els = {
   
   async function fetchWeek() {
     try {
-      const res = await fetch("/stats/week", { cache: "no-store" });
+      const res = await fetch(apiUrl("/stats/week"), { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const payload = await res.json();
       const days = Array.isArray(payload?.days) ? payload.days : [];
@@ -284,7 +295,7 @@ const els = {
     inFlight = true;
   
     try {
-      const res = await fetch("/data", { cache: "no-store" });
+      const res = await fetch(apiUrl("/data"), { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       bumpDebug();
@@ -307,7 +318,13 @@ const els = {
       // Keep previous values, but reflect state clearly.
       setStatus("bad", "Disconnected");
       const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
-      if (els.metricsHint) els.metricsHint.textContent = msg || "Unable to fetch latest reading";
+      if (els.metricsHint) {
+        const needsApiBase =
+          window.location.hostname.endsWith("github.io") && API_BASE === window.location.origin;
+        els.metricsHint.textContent = needsApiBase
+          ? "Set your Render API URL in the api-base meta tag."
+          : msg || "Unable to fetch latest reading";
+      }
       if (userInitiated) showToast("Couldn’t refresh. Check the server and network.");
       else if (!firstErrorShown) {
         firstErrorShown = true;
@@ -330,7 +347,7 @@ const els = {
   els.refreshBtn?.addEventListener("click", () => fetchOnce({ userInitiated: true }));
   els.resetBtn?.addEventListener("click", async () => {
     try {
-      const res = await fetch("/admin/reset-today", { method: "POST" });
+      const res = await fetch(apiUrl("/admin/reset-today"), { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       // Clear UI immediately
       applyData({
