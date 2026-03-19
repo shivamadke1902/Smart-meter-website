@@ -15,6 +15,7 @@ const HISTORY_FILE = path.join(DATA_DIR, "history.json");
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = Number(process.env.PORT) || 3000;
+const APP_TIME_ZONE = "Asia/Kolkata";
 const ALLOWED_ORIGINS = new Set(
   (process.env.ALLOWED_ORIGINS ||
     [
@@ -119,7 +120,7 @@ async function dbReadLast7DaysFromSamples() {
       max_demand_kw AS "maxDemandKw"
     FROM (
       SELECT
-        date_trunc('day', ts) AS day,
+        date_trunc('day', ts AT TIME ZONE $1) AS day,
         -- daily energy = max cumulative - min cumulative (safeguarded)
         GREATEST(
           COALESCE(MAX(energy_kwh), 0) - COALESCE(MIN(energy_kwh), 0),
@@ -128,20 +129,23 @@ async function dbReadLast7DaysFromSamples() {
         -- daily max demand = max power seen that day (kW)
         COALESCE(MAX(power_w), 0) / 1000.0 AS max_demand_kw
       FROM energy_samples
-      GROUP BY date_trunc('day', ts)
+      GROUP BY date_trunc('day', ts AT TIME ZONE $1)
     ) d
     ORDER BY day DESC
     LIMIT 7;
-  `
+  `,
+    [APP_TIME_ZONE]
   );
   return rows.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
 }
 
 function dayKey(d = new Date()) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
 }
 
 function clampNumber(n) {
