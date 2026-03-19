@@ -31,6 +31,33 @@
       </header>
 
       <main class="main">
+        <section class="panel panel--full" aria-labelledby="today-title" aria-live="polite">
+          <div class="panel__head">
+            <h2 id="today-title">Today</h2>
+            <p class="panel__hint">Energy used and peak demand (today)</p>
+          </div>
+          <dl class="metrics metrics--wide">
+            <div class="metric">
+              <dt>Energy Used</dt>
+              <dd><span id="todayEnergy" class="value">—</span> <span class="unit">kWh</span></dd>
+            </div>
+            <div class="metric">
+              <dt>Maximum Demand</dt>
+              <dd><span id="maxDemand" class="value">—</span> <span class="unit">kW</span></dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="panel panel--full panel--chart" aria-labelledby="week-title">
+          <div class="panel__head">
+            <h2 id="week-title">Energy Used (Last 7 Days)</h2>
+            <p class="panel__hint">Weekly view (auto-updating)</p>
+          </div>
+          <div class="chart-wrapper chart-wrapper--short">
+            <canvas id="weekChart" aria-label="Bar chart of energy used over the last 7 days" role="img"></canvas>
+          </div>
+        </section>
+
         <section id="data" class="panel" aria-labelledby="metrics-title" aria-live="polite">
           <div class="panel__head">
             <h2 id="metrics-title">Live Metrics</h2>
@@ -46,12 +73,12 @@
               <dd><span id="current" class="value">—</span> <span class="unit">A</span></dd>
             </div>
             <div class="metric">
-              <dt>Power</dt>
-              <dd><span id="power" class="value">—</span> <span class="unit">W</span></dd>
+              <dt>Power Factor</dt>
+              <dd><span id="powerFactor" class="value">—</span> <span class="unit">PF</span></dd>
             </div>
             <div class="metric">
-              <dt>Energy</dt>
-              <dd><span id="energy" class="value">—</span> <span class="unit">kWh</span></dd>
+              <dt>Power</dt>
+              <dd><span id="power" class="value">—</span> <span class="unit">W</span></dd>
             </div>
           </dl>
           <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>

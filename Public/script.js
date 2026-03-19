@@ -2,7 +2,9 @@ const els = {
     voltage: document.getElementById("voltage"),
     current: document.getElementById("current"),
     power: document.getElementById("power"),
-    energy: document.getElementById("energy"),
+    powerFactor: document.getElementById("powerFactor"),
+    todayEnergy: document.getElementById("todayEnergy"),
+    maxDemand: document.getElementById("maxDemand"),
     statusText: document.getElementById("statusText"),
     statusDot: document.getElementById("statusDot"),
     status: document.querySelector(".status"),
@@ -11,14 +13,18 @@ const els = {
     metricsHint: document.getElementById("metricsHint"),
     toast: document.getElementById("toast"),
     chartCanvas: document.getElementById("metricsChart"),
+    weekChartCanvas: document.getElementById("weekChart"),
   };
   
   let lastOkAt = 0;
   let inFlight = false;
   let toastTimer = null;
   let metricsChart = null;
+  let weekChart = null;
   let chartLabels = [];
   let chartData = [];
+  let weekLabels = [];
+  let weekData = [];
   
   function showToast(message) {
     if (!els.toast) return;
@@ -62,7 +68,9 @@ const els = {
     els.voltage.textContent = fmtNumber(data?.voltage, { maxFrac: 2 });
     els.current.textContent = fmtNumber(data?.current, { maxFrac: 2 });
     els.power.textContent = fmtNumber(data?.power, { maxFrac: 1 });
-    els.energy.textContent = fmtNumber(data?.energy, { maxFrac: 3 });
+    if (els.powerFactor) els.powerFactor.textContent = fmtNumber(data?.powerFactor, { maxFrac: 3 });
+    if (els.todayEnergy) els.todayEnergy.textContent = fmtNumber(data?.todayEnergyKwh, { maxFrac: 3 });
+    if (els.maxDemand) els.maxDemand.textContent = fmtNumber(data?.todayMaxDemandKw, { maxFrac: 3 });
     updateChart(data);
   }
   
@@ -116,6 +124,47 @@ const els = {
     });
   }
   
+  function initWeekChart() {
+    if (!els.weekChartCanvas || !window.Chart || weekChart) return;
+    const ctx = els.weekChartCanvas.getContext("2d");
+    weekChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: weekLabels,
+        datasets: [
+          {
+            label: "Energy (kWh)",
+            data: weekData,
+            backgroundColor: "rgba(37, 99, 235, 0.18)",
+            borderColor: "rgba(37, 99, 235, 0.9)",
+            borderWidth: 1.2,
+            borderRadius: 8,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            labels: { color: "#111111", font: { size: 11 } },
+          },
+          tooltip: { mode: "index", intersect: false },
+        },
+        scales: {
+          x: {
+            ticks: { color: "#555555", maxRotation: 0 },
+            grid: { color: "rgba(0,0,0,0.04)" },
+          },
+          y: {
+            ticks: { color: "#555555" },
+            grid: { color: "rgba(0,0,0,0.06)" },
+          },
+        },
+      },
+    });
+  }
+
   function updateChart(data) {
     if (!metricsChart) return;
     const powerValue = Number(data?.power);
@@ -134,6 +183,25 @@ const els = {
     metricsChart.update("none");
   }
   
+  async function fetchWeek() {
+    try {
+      const res = await fetch("/stats/week", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const payload = await res.json();
+      const days = Array.isArray(payload?.days) ? payload.days : [];
+
+      weekLabels.length = 0;
+      weekData.length = 0;
+      for (const d of days) {
+        weekLabels.push(d?.label ?? d?.dateKey ?? "");
+        weekData.push(Number(d?.energyKwh) || 0);
+      }
+      weekChart?.update("none");
+    } catch {
+      // silent; weekly view is non-critical
+    }
+  }
+
   async function fetchOnce({ userInitiated = false } = {}) {
     if (inFlight) return;
     inFlight = true;
@@ -173,6 +241,9 @@ const els = {
   
   // Initial load + polling
   initChart();
+  initWeekChart();
+  fetchWeek();
   fetchOnce();
   window.setInterval(fetchOnce, 2000);
+  window.setInterval(fetchWeek, 15000);
   startStaleWatcher();

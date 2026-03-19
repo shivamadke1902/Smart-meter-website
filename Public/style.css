@@ -293,6 +293,18 @@ body{
   flex-direction: column;
 }
 
+.panel--full{
+  grid-column: 1 / -1;
+}
+
+.metrics--wide{
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chart-wrapper--short{
+  height: 200px;
+}
+
 .chart-wrapper{
   margin-top: 8px;
   position: relative;
