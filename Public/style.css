@@ -142,6 +142,17 @@ body{
   outline-offset: 2px;
 }
 
+.btn--secondary{
+  border-color: #f97316;
+  color: #f97316;
+}
+
+.btn--secondary:hover{
+  background: #fffbeb;
+  border-color: #ea580c;
+  color: #ea580c;
+}
+
 /* Status */
 .status{
   display: flex;
@@ -206,6 +217,13 @@ body{
   box-shadow: var(--shadow-sm);
 }
 
+#data{
+  grid-column: 1 / -1;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .panel__head{
   display: flex;
   align-items: baseline;
@@ -235,6 +253,16 @@ body{
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-top: 8px;
+}
+
+.metrics--live{
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 900px){
+  .metrics--live{
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 520px){

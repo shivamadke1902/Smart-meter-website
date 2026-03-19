@@ -1,22 +1,27 @@
 const els = {
-    voltage: document.getElementById("voltage"),
-    current: document.getElementById("current"),
-    power: document.getElementById("power"),
-    powerFactor: document.getElementById("powerFactor"),
-    todayEnergy: document.getElementById("todayEnergy"),
-    maxDemand: document.getElementById("maxDemand"),
-    statusText: document.getElementById("statusText"),
-    statusDot: document.getElementById("statusDot"),
-    status: document.querySelector(".status"),
-    lastUpdated: document.getElementById("lastUpdated"),
-    refreshBtn: document.getElementById("refreshBtn"),
-    metricsHint: document.getElementById("metricsHint"),
-    toast: document.getElementById("toast"),
-    chartCanvas: document.getElementById("metricsChart"),
-    weekChartCanvas: document.getElementById("weekChart"),
-  };
-  
+  voltage: document.getElementById("voltage"),
+  current: document.getElementById("current"),
+  power: document.getElementById("power"),
+  powerFactor: document.getElementById("powerFactor"),
+  todayEnergy: document.getElementById("todayEnergy"),
+  maxDemand: document.getElementById("maxDemand"),
+  todayCost: document.getElementById("todayCost"),
+  lastOutage: document.getElementById("lastOutage"),
+  outageDuration: document.getElementById("outageDuration"),
+  statusText: document.getElementById("statusText"),
+  statusDot: document.getElementById("statusDot"),
+  status: document.querySelector(".status"),
+  lastUpdated: document.getElementById("lastUpdated"),
+  refreshBtn: document.getElementById("refreshBtn"),
+  resetBtn: document.getElementById("resetBtn"),
+  metricsHint: document.getElementById("metricsHint"),
+  toast: document.getElementById("toast"),
+  chartCanvas: document.getElementById("metricsChart"),
+  weekChartCanvas: document.getElementById("weekChart"),
+};
+  console.log("dashboard script loaded");
   let lastOkAt = 0;
+  let lastReadingTs = 0;
   let inFlight = false;
   let toastTimer = null;
   let metricsChart = null;
@@ -25,6 +30,8 @@ const els = {
   let chartData = [];
   let weekLabels = [];
   let weekData = [];
+  let firstErrorShown = false;
+  let debugTick = 0;
   
   function showToast(message) {
     if (!els.toast) return;
@@ -35,6 +42,17 @@ const els = {
       els.toast.hidden = true;
       els.toast.textContent = "";
     }, 3500);
+  }
+
+  // Visible proof that JS is running (updates every fetch)
+  function bumpDebug() {
+    debugTick += 1;
+    if (els.metricsHint) {
+      const base = els.metricsHint.textContent || "";
+      // Keep it short; just shows activity count.
+      if (!base.includes("• tick")) els.metricsHint.textContent = `${base} • tick ${debugTick}`.trim();
+      else els.metricsHint.textContent = base.replace(/• tick \d+/, `• tick ${debugTick}`);
+    }
   }
   
   function setStatus(kind, text) {
@@ -51,6 +69,20 @@ const els = {
     if (!Number.isFinite(n)) return "—";
     return new Intl.NumberFormat(undefined, { maximumFractionDigits: maxFrac }).format(n);
   }
+
+  function fmtDuration(seconds) {
+    const s = typeof seconds === "number" ? seconds : Number(seconds);
+    const MAX_OUTAGE_SECONDS = 6 * 60 * 60; // keep in sync with server
+    if (!Number.isFinite(s) || s <= 0 || s > MAX_OUTAGE_SECONDS) return "—";
+    if (s < 60) return `${fmtNumber(Math.round(s), { maxFrac: 0 })} sec`;
+    if (s < 3600) return `${fmtNumber(s / 60, { maxFrac: 1 })} min`;
+    return `${fmtNumber(s / 3600, { maxFrac: 1 })} hr`;
+  }
+
+  function setText(el, text) {
+    if (!el) return;
+    el.textContent = text;
+  }
   
   function updateLastUpdated(ts) {
     if (!els.lastUpdated) return;
@@ -65,12 +97,31 @@ const els = {
   }
   
   function applyData(data) {
-    els.voltage.textContent = fmtNumber(data?.voltage, { maxFrac: 2 });
-    els.current.textContent = fmtNumber(data?.current, { maxFrac: 2 });
-    els.power.textContent = fmtNumber(data?.power, { maxFrac: 1 });
-    if (els.powerFactor) els.powerFactor.textContent = fmtNumber(data?.powerFactor, { maxFrac: 3 });
-    if (els.todayEnergy) els.todayEnergy.textContent = fmtNumber(data?.todayEnergyKwh, { maxFrac: 3 });
-    if (els.maxDemand) els.maxDemand.textContent = fmtNumber(data?.todayMaxDemandKw, { maxFrac: 3 });
+    setText(els.voltage, fmtNumber(data?.voltage, { maxFrac: 2 }));
+    setText(els.current, fmtNumber(data?.current, { maxFrac: 2 }));
+    setText(els.power, fmtNumber(data?.power, { maxFrac: 1 }));
+    setText(els.powerFactor, fmtNumber(data?.powerFactor, { maxFrac: 3 }));
+    setText(els.todayEnergy, fmtNumber(data?.todayEnergyKwh, { maxFrac: 3 }));
+    setText(els.maxDemand, fmtNumber(data?.todayMaxDemandKw, { maxFrac: 3 }));
+
+    if (els.todayCost && data?.todayCost != null) {
+      els.todayCost.textContent = fmtNumber(data.todayCost, { maxFrac: 2 });
+    }
+
+    if (els.lastOutage) {
+      if (data?.lastOutage) {
+        const d = new Date(data.lastOutage);
+        els.lastOutage.textContent = d.toLocaleString();
+      } else {
+        els.lastOutage.textContent = "—";
+      }
+    }
+
+    if (els.outageDuration) {
+      const dur = data?.lastOutageDuration;
+      els.outageDuration.textContent = fmtDuration(dur);
+    }
+
     updateChart(data);
   }
   
@@ -108,6 +159,17 @@ const els = {
           tooltip: {
             mode: "index",
             intersect: false,
+            callbacks: {
+              title(items) {
+                const item = items?.[0];
+                return item?.label ?? "";
+              },
+              label(item) {
+                const v = item.parsed.y;
+                const value = Number.isFinite(v) ? fmtNumber(v, { maxFrac: 1 }) : "—";
+                return `Power: ${value} W`;
+              },
+            },
           },
         },
         scales: {
@@ -149,7 +211,22 @@ const els = {
           legend: {
             labels: { color: "#111111", font: { size: 11 } },
           },
-          tooltip: { mode: "index", intersect: false },
+          tooltip: {
+            mode: "index",
+            intersect: false,
+            callbacks: {
+              title(items) {
+                const item = items?.[0];
+                const label = item?.label ?? "";
+                return label ? `Day: ${label}` : "";
+              },
+              label(item) {
+                const v = item.parsed.y;
+                const value = Number.isFinite(v) ? fmtNumber(v, { maxFrac: 2 }) : "—";
+                return `Energy: ${value} kWh`;
+              },
+            },
+          },
         },
         scales: {
           x: {
@@ -210,19 +287,32 @@ const els = {
       const res = await fetch("/data", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-  
+      bumpDebug();
+
+      let readingTs = Number(data?.ts);
+      if (!Number.isFinite(readingTs)) {
+        // Fallback to "now" if backend didn't send a proper timestamp
+        readingTs = Date.now();
+      }
+
+      lastReadingTs = readingTs;
       applyData(data);
-  
+
       lastOkAt = Date.now();
       setStatus("ok", "Connected");
-      updateLastUpdated(lastOkAt);
+      updateLastUpdated(readingTs);
       if (els.metricsHint) els.metricsHint.textContent = "Live readings";
       if (userInitiated) showToast("Updated.");
     } catch (err) {
       // Keep previous values, but reflect state clearly.
       setStatus("bad", "Disconnected");
-      if (els.metricsHint) els.metricsHint.textContent = "Unable to fetch latest reading";
-      if (userInitiated) showToast("Couldn’t refresh. Is the server running?");
+      const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
+      if (els.metricsHint) els.metricsHint.textContent = msg || "Unable to fetch latest reading";
+      if (userInitiated) showToast("Couldn’t refresh. Check the server and network.");
+      else if (!firstErrorShown) {
+        firstErrorShown = true;
+        showToast("Disconnected. Check server/network.");
+      }
     } finally {
       inFlight = false;
     }
@@ -230,14 +320,36 @@ const els = {
   
   function startStaleWatcher() {
     window.setInterval(() => {
-      if (!lastOkAt) return;
-      const ageMs = Date.now() - lastOkAt;
+      if (!lastReadingTs) return;
+      const ageMs = Date.now() - lastReadingTs;
       if (ageMs > 7000) setStatus("stale", "Stale data");
       else setStatus("ok", "Connected");
     }, 1000);
   }
   
   els.refreshBtn?.addEventListener("click", () => fetchOnce({ userInitiated: true }));
+  els.resetBtn?.addEventListener("click", async () => {
+    try {
+      const res = await fetch("/admin/reset-today", { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Clear UI immediately
+      applyData({
+        voltage: null,
+        current: null,
+        power: null,
+        powerFactor: null,
+        todayEnergyKwh: null,
+        todayMaxDemandKw: null,
+        todayCost: null,
+        lastOutage: null,
+        lastOutageDuration: 0,
+      });
+      updateLastUpdated(null);
+      showToast("Today’s values reset.");
+    } catch (e) {
+      showToast("Couldn’t reset. Check server.");
+    }
+  });
   
   // Initial load + polling
   initChart();

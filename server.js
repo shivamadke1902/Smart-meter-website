@@ -1,14 +1,12 @@
 
 require("dotenv").config();
 const express = require("express");
-const SerialPort = require("serialport");
-const { ReadlineParser } = require("@serialport/parser-readline");
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
 
 const app = express();
-app.use(express.static("public")); // folder with index.html, script.js, style.css
+app.use(express.static(path.join(__dirname, "Public"))); // folder with index.html, script.js, style.css
 
 const DATA_DIR = path.join(__dirname, "data");
 const HISTORY_FILE = path.join(DATA_DIR, "history.json");
@@ -30,6 +28,16 @@ async function ensureDbSchema() {
       max_demand_kw double precision NOT NULL DEFAULT 0,
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+
+    CREATE TABLE IF NOT EXISTS energy_samples (
+      id bigserial PRIMARY KEY,
+      ts timestamptz NOT NULL DEFAULT now(),
+      voltage double precision,
+      current double precision,
+      power_w double precision,
+      energy_kwh double precision,
+      power_factor double precision
+    );
   `);
 }
 
@@ -49,6 +57,28 @@ async function dbUpsertDay({ dateKey, energyKwh, maxDemandKw }) {
   );
 }
 
+async function dbInsertSampleFromSensor() {
+  if (!pool) return;
+  if (!sensorData || Object.keys(sensorData).length === 0) return;
+
+  const { voltage, current, power, energy, powerFactor } = sensorData;
+
+  await pool.query(
+    `
+    INSERT INTO energy_samples (ts, voltage, current, power_w, energy_kwh, power_factor)
+    VALUES (to_timestamp($1 / 1000.0), $2, $3, $4, $5, $6);
+  `,
+    [
+      sensorData.ts ?? Date.now(),
+      clampNumber(voltage),
+      clampNumber(current),
+      clampNumber(power),
+      clampNumber(energy),
+      clampNumber(powerFactor),
+    ]
+  );
+}
+
 async function dbReadLast7Days() {
   if (!pool) return null;
   const { rows } = await pool.query(
@@ -58,6 +88,35 @@ async function dbReadLast7Days() {
            max_demand_kw as "maxDemandKw"
     FROM energy_daily
     ORDER BY date_key DESC
+    LIMIT 7;
+  `
+  );
+  return rows.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+}
+
+// Aggregate last 7 days from the high‑frequency samples table
+async function dbReadLast7DaysFromSamples() {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `
+    SELECT
+      to_char(day, 'YYYY-MM-DD') AS "dateKey",
+      energy_kwh AS "energyKwh",
+      max_demand_kw AS "maxDemandKw"
+    FROM (
+      SELECT
+        date_trunc('day', ts) AS day,
+        -- daily energy = max cumulative - min cumulative (safeguarded)
+        GREATEST(
+          COALESCE(MAX(energy_kwh), 0) - COALESCE(MIN(energy_kwh), 0),
+          0
+        ) AS energy_kwh,
+        -- daily max demand = max power seen that day (kW)
+        COALESCE(MAX(power_w), 0) / 1000.0 AS max_demand_kw
+      FROM energy_samples
+      GROUP BY date_trunc('day', ts)
+    ) d
+    ORDER BY day DESC
     LIMIT 7;
   `
   );
@@ -102,6 +161,67 @@ let activeDayKey = dayKey();
 let dayStartEnergyKwh = null; // from meter cumulative energy reading at start-of-day
 let todayMaxDemandKw = 0;
 let lastSampleAtMs = 0;
+let lastOutage = null;
+let lastOutageDuration = 0;
+
+app.use(express.json());
+
+app.post("/api/data", (req, res) => {
+  const data = req.body;
+
+  // Only accept reasonable outage durations (e.g. ignore obviously bad values)
+  const rawOutage = Number(data.outageDuration);
+  const MAX_OUTAGE_SECONDS = 6 * 60 * 60; // 6 hours
+  if (Number.isFinite(rawOutage) && rawOutage > 0 && rawOutage <= MAX_OUTAGE_SECONDS) {
+    lastOutage = new Date();
+    lastOutageDuration = rawOutage;
+  } else if (!rawOutage || rawOutage <= 0) {
+    // Reset if device reports no outage
+    lastOutage = null;
+    lastOutageDuration = 0;
+  }
+
+  // helpful when debugging API pushes
+  console.log("DATA RECEIVED:", data);
+
+  applyIncomingReading(data);
+
+  res.json({ ok: true });
+});
+
+// Reset today's in-memory stats and outage info (does not touch DB history)
+app.post("/admin/reset-today", (req, res) => {
+  // clear in-memory aggregates
+  dayStartEnergyKwh = null;
+  todayMaxDemandKw = 0;
+  lastOutage = null;
+  lastOutageDuration = 0;
+  lastSampleAtMs = 0;
+  activeDayKey = dayKey(); // reset to today's date
+
+  // also clear the fields that the frontend reads from /data
+  sensorData = {
+    voltage: null,
+    current: null,
+    power: null,
+    energy: null,
+    powerFactor: null,
+    todayEnergyKwh: null,
+    todayMaxDemandKw: 0,
+    todayCost: null,
+    ts: null,
+  };
+
+  console.log("Admin reset: cleared today's in-memory metrics");
+  res.json({ ok: true });
+});
+
+// Optional debug endpoint so you can GET the latest reading at /api/data
+app.get("/api/data", (req, res) => {
+  res.json(sensorData);
+});
+
+const COST_PER_KWH = 7;
 
 function rolloverIfNeeded(now = new Date()) {
   const k = dayKey(now);
@@ -157,12 +277,16 @@ function applyIncomingReading(obj) {
   }
 
   if (powerW != null) {
-    const demandKw = Math.max(0, powerW / 1000);
+    const MAX_REASONABLE_KW = 50; // clamp obviously bogus spikes
+    let demandKw = Math.max(0, powerW / 1000);
+    if (demandKw > MAX_REASONABLE_KW) demandKw = MAX_REASONABLE_KW;
     if (demandKw > todayMaxDemandKw) todayMaxDemandKw = demandKw;
   }
 
   const todayEnergyKwh =
     energyKwh != null && dayStartEnergyKwh != null ? Math.max(0, energyKwh - dayStartEnergyKwh) : null;
+  const todayCost =
+    todayEnergyKwh != null ? todayEnergyKwh * COST_PER_KWH : null;
 
   sensorData = {
     voltage,
@@ -172,42 +296,19 @@ function applyIncomingReading(obj) {
     powerFactor,
     todayEnergyKwh,
     todayMaxDemandKw,
+    todayCost,
     ts: Date.now(),
   };
 
   lastSampleAtMs = Date.now();
 }
 
-// Serial setup (MCU provides readings)
-const SERIAL_PATH = process.env.SERIAL_PORT || "COM18";
-const SERIAL_BAUD = Number(process.env.SERIAL_BAUD || 9600);
-
-let port = null;
-let parser = null;
-try {
-  port = new SerialPort.SerialPort({ path: SERIAL_PATH, baudRate: SERIAL_BAUD });
-  port.on("open", () => {
-    console.log(`Serial port opened on ${SERIAL_PATH} at ${SERIAL_BAUD} baud`);
-  });
-  port.on("error", (err) => {
-    console.error("Serial port error:", err.message);
-  });
-  parser = port.pipe(new ReadlineParser({ delimiter: "\r\n" }));
-  parser.on("data", (line) => {
-    console.log("RAW from MCU:", JSON.stringify(line));
-    try {
-      const obj = JSON.parse(line);
-      applyIncomingReading(obj);
-    } catch (e) {
-      console.error("Failed to parse JSON from MCU:", e.message);
-    }
-  });
-} catch (e) {
-  console.error("Serial init failed:", e.message);
-}
-
 app.get("/data", (req, res) => {
-  res.json(sensorData); // frontend expects keys: voltage, current, power, energy
+  res.json({
+    ...sensorData,
+    lastOutage,
+    lastOutageDuration,
+  });
 });
 
 app.get("/stats/today", (req, res) => {
@@ -215,6 +316,7 @@ app.get("/stats/today", (req, res) => {
     dateKey: activeDayKey,
     energyKwh: sensorData?.todayEnergyKwh ?? null,
     maxDemandKw: sensorData?.todayMaxDemandKw ?? 0,
+    todayCost: sensorData?.todayCost ?? null,
     ts: sensorData?.ts ?? null,
   });
 });
@@ -222,34 +324,57 @@ app.get("/stats/today", (req, res) => {
 app.get("/stats/week", (req, res) => {
   rolloverIfNeeded(new Date());
 
-  const merged = history.slice();
-  // include today so the weekly chart always has current-day data
-  merged.push({
-    dateKey: activeDayKey,
-    energyKwh: sensorData?.todayEnergyKwh ?? null,
-    maxDemandKw: sensorData?.todayMaxDemandKw ?? 0,
-  });
+  // If Neon is configured, prefer aggregating from high‑frequency samples.
+  // Otherwise, fall back to the local history file / daily table.
+  (async () => {
+    try {
+      let src = null;
+      if (pool) {
+        src = await dbReadLast7DaysFromSamples();
+        if (!src || !src.length) {
+          src = await dbReadLast7Days();
+        }
+      } else {
+        src = history;
+      }
 
-  const byKey = new Map();
-  for (const d of merged) {
-    if (!d || typeof d.dateKey !== "string") continue;
-    byKey.set(d.dateKey, d);
-  }
+      const merged = Array.isArray(src) ? src.slice() : [];
+      // include today's in-memory data only if that date isn't already present
+      if (!merged.some((d) => d && d.dateKey === activeDayKey)) {
+        merged.push({
+          dateKey: activeDayKey,
+          energyKwh: sensorData?.todayEnergyKwh ?? null,
+          maxDemandKw: sensorData?.todayMaxDemandKw ?? 0,
+        });
+      }
 
-  const days = Array.from(byKey.values())
-    .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1))
-    .slice(-7)
-    .map((d) => ({
-      dateKey: d.dateKey,
-      label: d.dateKey.slice(5),
-      energyKwh: clampNumber(d.energyKwh) ?? 0,
-      maxDemandKw: clampNumber(d.maxDemandKw) ?? 0,
-    }));
+      const byKey = new Map();
+      for (const d of merged) {
+        if (!d || typeof d.dateKey !== "string") continue;
+        byKey.set(d.dateKey, d);
+      }
 
-  res.json({ days });
+      const days = Array.from(byKey.values())
+        .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1))
+        .slice(-7)
+        .map((d) => ({
+          dateKey: d.dateKey,
+          label: d.dateKey.slice(5),
+          energyKwh: clampNumber(d.energyKwh) ?? 0,
+          maxDemandKw: clampNumber(d.maxDemandKw) ?? 0,
+        }));
+
+      res.json({ days });
+    } catch (e) {
+      console.error("Failed to build /stats/week from DB:", e.message);
+      res.json({ days: [] });
+    }
+  })();
 });
 
-app.listen(3000, () => console.log("Server running on http://localhost:3000"));
+app.listen(3000, "0.0.0.0", () => {
+  console.log("Server running on http://0.0.0.0:3000");
+});
 
 // Initialize DB (optional) and hydrate in-memory history
 (async () => {
@@ -267,6 +392,11 @@ app.listen(3000, () => console.log("Server running on http://localhost:3000"));
     } else {
       console.log("Neon connected (no history rows yet).");
     }
+
+    // Start periodic sample logging every 2 minutes
+    setInterval(() => {
+      dbInsertSampleFromSensor().catch((e) => console.error("Failed to insert energy sample:", e.message));
+    }, 2 * 60 * 1000);
   } catch (e) {
     console.error("Neon init failed, using file history:", e.message);
   }

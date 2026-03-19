@@ -15,6 +15,7 @@
           <p class="eyebrow">Energy Monitor</p>
           <div class="header__actions" aria-label="Dashboard actions">
             <button id="refreshBtn" class="btn" type="button">Refresh</button>
+            <button id="resetBtn" class="btn btn--secondary" type="button">Reset today</button>
           </div>
         </div>
         <h1>Energy Monitoring Dashboard</h1>
@@ -31,39 +32,12 @@
       </header>
 
       <main class="main">
-        <section class="panel panel--full" aria-labelledby="today-title" aria-live="polite">
-          <div class="panel__head">
-            <h2 id="today-title">Today</h2>
-            <p class="panel__hint">Energy used and peak demand (today)</p>
-          </div>
-          <dl class="metrics metrics--wide">
-            <div class="metric">
-              <dt>Energy Used</dt>
-              <dd><span id="todayEnergy" class="value">—</span> <span class="unit">kWh</span></dd>
-            </div>
-            <div class="metric">
-              <dt>Maximum Demand</dt>
-              <dd><span id="maxDemand" class="value">—</span> <span class="unit">kW</span></dd>
-            </div>
-          </dl>
-        </section>
-
-        <section class="panel panel--full panel--chart" aria-labelledby="week-title">
-          <div class="panel__head">
-            <h2 id="week-title">Energy Used (Last 7 Days)</h2>
-            <p class="panel__hint">Weekly view (auto-updating)</p>
-          </div>
-          <div class="chart-wrapper chart-wrapper--short">
-            <canvas id="weekChart" aria-label="Bar chart of energy used over the last 7 days" role="img"></canvas>
-          </div>
-        </section>
-
         <section id="data" class="panel" aria-labelledby="metrics-title" aria-live="polite">
           <div class="panel__head">
             <h2 id="metrics-title">Live Metrics</h2>
             <p class="panel__hint" id="metricsHint">Waiting for first reading…</p>
           </div>
-          <dl class="metrics">
+          <dl class="metrics metrics--live">
             <div class="metric">
               <dt>Voltage</dt>
               <dd><span id="voltage" class="value">—</span> <span class="unit">V</span></dd>
@@ -84,13 +58,52 @@
           <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
         </section>
 
-        <section class="panel panel--chart" aria-labelledby="chart-title">
+        <section class="panel panel--full" aria-labelledby="today-title" aria-live="polite">
+          <div class="panel__head">
+            <h2 id="today-title">Today</h2>
+            <p class="panel__hint">Energy used and peak demand (today)</p>
+          </div>
+          <dl class="metrics metrics--wide">
+            <div class="metric">
+              <dt>Energy Used</dt>
+              <dd><span id="todayEnergy" class="value">—</span> <span class="unit">kWh</span></dd>
+            </div>
+            <div class="metric">
+              <dt>Maximum Demand</dt>
+              <dd><span id="maxDemand" class="value">—</span> <span class="unit">kW</span></dd>
+            </div>
+            <div class="metric">
+              <dt>Cost (Today)</dt>
+              <dd><span id="todayCost" class="value">—</span> <span class="unit">₹</span></dd>
+            </div>
+            <!-- <div class="metric">
+              <dt>Last Outage</dt>
+              <dd><span id="lastOutage" class="value">—</span></dd>
+            </div> -->
+            <!-- <div class="metric">
+              <dt>Outage Duration</dt>
+              <dd><span id="outageDuration" class="value">—</span></dd>
+            </div> -->
+          </dl>
+        </section>
+
+        <section class="panel panel--full panel--chart" aria-labelledby="chart-title">
           <div class="panel__head">
             <h2 id="chart-title">Power Over Time</h2>
             <p class="panel__hint">Last few samples (auto-updating)</p>
           </div>
           <div class="chart-wrapper">
             <canvas id="metricsChart" aria-label="Line chart of power readings over time" role="img"></canvas>
+          </div>
+        </section>
+
+        <section class="panel panel--full panel--chart" aria-labelledby="week-title">
+          <div class="panel__head">
+            <h2 id="week-title">Energy Used (Last 7 Days)</h2>
+            <p class="panel__hint">Weekly view (auto-updating)</p>
+          </div>
+          <div class="chart-wrapper chart-wrapper--short">
+            <canvas id="weekChart" aria-label="Bar chart of energy used over the last 7 days" role="img"></canvas>
           </div>
         </section>
       </main>
@@ -104,6 +117,6 @@
       <div class="noscript">This dashboard needs JavaScript enabled to show live data.</div>
     </noscript>
 
-    <script src="script.js" defer></script>
+    <script src="script.js?v=1" defer></script>
   </body>
 </html>
