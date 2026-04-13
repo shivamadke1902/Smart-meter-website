@@ -9,7 +9,7 @@ const app = express();
 const STATIC_DIR = __dirname;
 const INDEX_FILE = path.join(STATIC_DIR, "index.html");
 
-app.use(express.static(STATIC_DIR, { index: false }));
+app.use(express.static(STATIC_DIR, { index: false, redirect: false }));
 const DATA_DIR = path.join(__dirname, "data");
 const HISTORY_FILE = path.join(DATA_DIR, "history.json");
 const DAY_STATE_FILE = path.join(DATA_DIR, "day-state.json");
