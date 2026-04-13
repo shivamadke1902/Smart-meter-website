@@ -1,0 +1,8 @@
+{
+  "activeDayKey": "2026-04-13",
+  "dayStartEnergyKwh": 123.45,
+  "todayEnergyKwh": 0,
+  "todayMaxDemandKw": 0.4129,
+  "todayCost": 0,
+  "ts": 1776099917069
+}

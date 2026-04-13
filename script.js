@@ -21,10 +21,15 @@ const els = {
 const apiBaseMeta = document.querySelector('meta[name="api-base"]');
 const configuredApiBase = apiBaseMeta?.content?.trim() || "";
 const DEFAULT_API_BASE = "https://smart-meter-website.onrender.com";
-const API_BASE =
+const normalizedConfiguredApiBase =
   configuredApiBase && !configuredApiBase.includes("YOUR-RENDER-SERVICE")
     ? configuredApiBase.replace(/\/+$/, "")
-    : DEFAULT_API_BASE;
+    : "";
+const API_BASE = normalizedConfiguredApiBase
+  ? normalizedConfiguredApiBase
+  : window.location.hostname.endsWith("github.io")
+    ? DEFAULT_API_BASE
+    : window.location.origin;
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
