@@ -309,7 +309,12 @@ function apiUrl(path) {
     inFlight = true;
   
     try {
-      const res = await fetch(apiUrl("/data"), { cache: "no-store" });
+      // Prefer /api/data to avoid collisions with static /data directories.
+      let res = await fetch(apiUrl("/api/data"), { cache: "no-store" });
+      if (!res.ok) {
+        // Backward compatibility for older deployments that only expose /data.
+        res = await fetch(apiUrl("/data"), { cache: "no-store" });
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       bumpDebug();
