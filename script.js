@@ -75,7 +75,7 @@ function shiftDateKey(dateKey, daysDelta) {
   let firstErrorShown = false;
   let debugTick = 0;
   let isStaleReading = false;
-  const STALE_MS = 7000;
+  const STALE_MS = 3000;
   
   function showToast(message) {
     if (!els.toast) return;
@@ -385,17 +385,13 @@ function shiftDateKey(dateKey, daysDelta) {
       }
       if (userInitiated) showToast("Updated.");
     } catch (err) {
-      // Keep previous values, but reflect state clearly.
-      setStatus("bad", "Disconnected");
+      // Treat fetch failures as stale live stream until fresh data resumes.
+      setStatus("stale", "Stale data");
       isStaleReading = true;
       setLiveMetricsToZero();
       const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
       if (els.metricsHint) {
-        const needsApiBase =
-          window.location.hostname.endsWith("github.io") && API_BASE === window.location.origin;
-        els.metricsHint.textContent = needsApiBase
-          ? "Set your Render API URL in the api-base meta tag."
-          : msg || "Unable to fetch latest reading";
+        els.metricsHint.textContent = msg || "Unable to fetch latest reading";
       }
       if (userInitiated) showToast("Couldn’t refresh. Check the server and network.");
       else if (!firstErrorShown) {
