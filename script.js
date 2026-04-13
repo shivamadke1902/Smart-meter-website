@@ -76,7 +76,7 @@ let weekData = [];
 let firstErrorShown = false;
 let debugTick = 0;
 let isStaleReading = false;
-const STALE_MS = 7000;
+const STALE_MS = 7000; // 2s MCU interval + 2s fetch interval + 3s safety margin
 
 function showToast(message) {
   if (!els.toast) return;
