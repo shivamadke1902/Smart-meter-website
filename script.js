@@ -125,6 +125,16 @@ function shiftDateKey(dateKey, daysDelta) {
     if (!el) return;
     el.textContent = text;
   }
+
+  function setLiveMetricsToZero() {
+    setText(els.voltage, "0");
+    setText(els.current, "0");
+    setText(els.power, "0");
+    setText(els.powerFactor, "0");
+    setText(els.todayEnergy, "0");
+    setText(els.maxDemand, "0");
+    setText(els.todayCost, "0");
+  }
   
   function updateLastUpdated(ts) {
     if (!els.lastUpdated) return;
@@ -368,6 +378,7 @@ function shiftDateKey(dateKey, daysDelta) {
     } catch (err) {
       // Keep previous values, but reflect state clearly.
       setStatus("bad", "Disconnected");
+      setLiveMetricsToZero();
       const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
       if (els.metricsHint) {
         const needsApiBase =
@@ -390,7 +401,10 @@ function shiftDateKey(dateKey, daysDelta) {
     window.setInterval(() => {
       if (!lastReadingTs) return;
       const ageMs = Date.now() - lastReadingTs;
-      if (ageMs > 7000) setStatus("stale", "Stale data");
+      if (ageMs > 7000) {
+        setStatus("stale", "Stale data");
+        setLiveMetricsToZero();
+      }
       else setStatus("ok", "Connected");
     }, 1000);
   }
