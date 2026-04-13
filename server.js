@@ -13,6 +13,7 @@ app.use(express.static(STATIC_DIR, { index: false, redirect: false }));
 const DATA_DIR = path.join(__dirname, "data");
 const HISTORY_FILE = path.join(DATA_DIR, "history.json");
 const DAY_STATE_FILE = path.join(DATA_DIR, "day-state.json");
+const LIVE_STALE_MS = 7000;
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = Number(process.env.PORT) || 3000;
@@ -270,6 +271,31 @@ function persistTodayState() {
   });
 }
 
+function isLiveDataStale(nowMs = Date.now()) {
+  const ts = clampNumber(sensorData?.ts);
+  if (!Number.isFinite(ts)) return true;
+  return nowMs - ts > LIVE_STALE_MS;
+}
+
+function buildLivePayload() {
+  const stale = isLiveDataStale();
+  if (!stale) {
+    return { ...sensorData, stale: false };
+  }
+
+  return {
+    ...sensorData,
+    voltage: 0,
+    current: 0,
+    power: 0,
+    powerFactor: 0,
+    todayEnergyKwh: 0,
+    todayMaxDemandKw: 0,
+    todayCost: 0,
+    stale: true,
+  };
+}
+
 app.use((req, res, next) => {
   // Allow ALL origins (perfect for public IoT dashboard)
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -357,7 +383,7 @@ app.post("/admin/reset-today", (req, res) => {
 
 // Optional debug endpoint so you can GET the latest reading at /api/data
 app.get("/api/data", (req, res) => {
-  res.json(sensorData);
+  res.json(buildLivePayload());
 });
 
 const COST_PER_KWH = 7;
@@ -443,7 +469,7 @@ function applyIncomingReading(obj) {
 
 app.get("/data", (req, res) => {
   res.json({
-    ...sensorData,
+    ...buildLivePayload(),
     lastOutage,
     lastOutageDuration,
   });
