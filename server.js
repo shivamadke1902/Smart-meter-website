@@ -12,6 +12,7 @@ const INDEX_FILE = path.join(STATIC_DIR, "index.html");
 app.use(express.static(STATIC_DIR, { index: false }));
 const DATA_DIR = path.join(__dirname, "data");
 const HISTORY_FILE = path.join(DATA_DIR, "history.json");
+const DAY_STATE_FILE = path.join(DATA_DIR, "day-state.json");
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = Number(process.env.PORT) || 3000;
@@ -94,7 +95,7 @@ async function dbInsertSampleFromSensor() {
   );
 }
 
-async function dbReadLast7Days() {
+async function dbReadDailyHistory() {
   if (!pool) return null;
   const { rows } = await pool.query(
     `
@@ -102,15 +103,14 @@ async function dbReadLast7Days() {
            energy_kwh as "energyKwh",
            max_demand_kw as "maxDemandKw"
     FROM energy_daily
-    ORDER BY date_key DESC
-    LIMIT 7;
+    ORDER BY date_key ASC;
   `
   );
-  return rows.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+  return rows;
 }
 
-// Aggregate last 7 days from the high‑frequency samples table
-async function dbReadLast7DaysFromSamples() {
+// Aggregate all days from the high-frequency samples table
+async function dbReadDailyHistoryFromSamples() {
   if (!pool) return null;
   const { rows } = await pool.query(
     `
@@ -131,12 +131,11 @@ async function dbReadLast7DaysFromSamples() {
       FROM energy_samples
       GROUP BY date_trunc('day', ts AT TIME ZONE $1)
     ) d
-    ORDER BY day DESC
-    LIMIT 7;
+    ORDER BY day ASC;
   `,
     [APP_TIME_ZONE]
   );
-  return rows.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+  return rows;
 }
 
 function dayKey(d = new Date()) {
@@ -192,14 +191,68 @@ function writeHistory(history) {
   }
 }
 
+function readDayState() {
+  try {
+    if (!fs.existsSync(DAY_STATE_FILE)) return null;
+    const raw = fs.readFileSync(DAY_STATE_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDayState(state) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(DAY_STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  } catch (e) {
+    console.error("Failed to write day state:", e.message);
+  }
+}
+
 let sensorData = {};
 let history = readHistory(); // [{ dateKey, energyKwh, maxDemandKw }]
-let activeDayKey = dayKey();
-let dayStartEnergyKwh = null; // from meter cumulative energy reading at start-of-day
-let todayMaxDemandKw = 0;
+const persistedDayState = readDayState();
+const todayKey = dayKey();
+let activeDayKey =
+  persistedDayState?.activeDayKey && typeof persistedDayState.activeDayKey === "string"
+    ? persistedDayState.activeDayKey
+    : todayKey;
+if (activeDayKey !== todayKey) {
+  activeDayKey = todayKey;
+}
+let dayStartEnergyKwh =
+  activeDayKey === todayKey ? clampNumber(persistedDayState?.dayStartEnergyKwh) : null;
+let todayMaxDemandKw =
+  activeDayKey === todayKey ? clampNumber(persistedDayState?.todayMaxDemandKw) ?? 0 : 0;
 let lastSampleAtMs = 0;
 let lastOutage = null;
 let lastOutageDuration = 0;
+if (activeDayKey === todayKey) {
+  sensorData = {
+    voltage: null,
+    current: null,
+    power: null,
+    energy: null,
+    powerFactor: null,
+    todayEnergyKwh: clampNumber(persistedDayState?.todayEnergyKwh),
+    todayMaxDemandKw,
+    todayCost: clampNumber(persistedDayState?.todayCost),
+    ts: clampNumber(persistedDayState?.ts),
+  };
+}
+
+function persistTodayState() {
+  writeDayState({
+    activeDayKey,
+    dayStartEnergyKwh,
+    todayEnergyKwh: clampNumber(sensorData?.todayEnergyKwh),
+    todayMaxDemandKw,
+    todayCost: clampNumber(sensorData?.todayCost),
+    ts: clampNumber(sensorData?.ts),
+  });
+}
 
 app.use((req, res, next) => {
   const origin = req.get("origin");
@@ -279,6 +332,7 @@ app.post("/admin/reset-today", (req, res) => {
   };
 
   console.log("Admin reset: cleared today's in-memory metrics");
+  persistTodayState();
   res.json({ ok: true });
 });
 
@@ -296,10 +350,9 @@ function rolloverIfNeeded(now = new Date()) {
   // finalize previous day using what we know now
   const prevKey = activeDayKey;
   const energyNow = clampNumber(sensorData?.energy);
-  let prevEnergyKwh = null;
-  if (dayStartEnergyKwh != null && energyNow != null) {
-    prevEnergyKwh = Math.max(0, energyNow - dayStartEnergyKwh);
-  }
+  const computedEnergyKwh =
+    dayStartEnergyKwh != null && energyNow != null ? Math.max(0, energyNow - dayStartEnergyKwh) : null;
+  const prevEnergyKwh = computedEnergyKwh ?? clampNumber(sensorData?.todayEnergyKwh);
 
   if (prevEnergyKwh != null) {
     const existingIdx = history.findIndex((d) => d?.dateKey === prevKey);
@@ -311,11 +364,9 @@ function rolloverIfNeeded(now = new Date()) {
     if (existingIdx >= 0) history[existingIdx] = entry;
     else history.push(entry);
 
-    // keep only last 7 by dateKey
     history = history
       .filter((d) => d && typeof d.dateKey === "string")
-      .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1))
-      .slice(-7);
+      .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
     writeHistory(history);
 
     // also persist into Neon if configured (best-effort)
@@ -326,6 +377,7 @@ function rolloverIfNeeded(now = new Date()) {
   activeDayKey = k;
   dayStartEnergyKwh = clampNumber(sensorData?.energy);
   todayMaxDemandKw = 0;
+  persistTodayState();
 }
 
 function applyIncomingReading(obj) {
@@ -365,6 +417,7 @@ function applyIncomingReading(obj) {
     todayCost,
     ts: Date.now(),
   };
+  persistTodayState();
 
   lastSampleAtMs = Date.now();
 }
@@ -396,9 +449,9 @@ app.get("/stats/week", (req, res) => {
     try {
       let src = null;
       if (pool) {
-        src = await dbReadLast7DaysFromSamples();
+        src = await dbReadDailyHistoryFromSamples();
         if (!src || !src.length) {
-          src = await dbReadLast7Days();
+          src = await dbReadDailyHistory();
         }
       } else {
         src = history;
@@ -422,7 +475,6 @@ app.get("/stats/week", (req, res) => {
 
       const days = Array.from(byKey.values())
         .sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1))
-        .slice(-7)
         .map((d) => ({
           dateKey: d.dateKey,
           label: d.dateKey.slice(5),
@@ -447,7 +499,7 @@ app.listen(PORT, "0.0.0.0", () => {
   if (!pool) return;
   try {
     await ensureDbSchema();
-    const dbHistory = await dbReadLast7Days();
+    const dbHistory = await dbReadDailyHistory();
     if (Array.isArray(dbHistory) && dbHistory.length) {
       history = dbHistory.map((d) => ({
         dateKey: d.dateKey,
