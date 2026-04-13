@@ -75,6 +75,7 @@ function shiftDateKey(dateKey, daysDelta) {
   let firstErrorShown = false;
   let debugTick = 0;
   let isStaleReading = false;
+  const STALE_MS = 7000;
   
   function showToast(message) {
     if (!els.toast) return;
@@ -361,12 +362,12 @@ function shiftDateKey(dateKey, daysDelta) {
 
       let readingTs = Number(data?.ts);
       if (!Number.isFinite(readingTs)) {
-        // Fallback to "now" if backend didn't send a proper timestamp
-        readingTs = Date.now();
+        readingTs = 0;
       }
 
+      const ageMs = readingTs > 0 ? Date.now() - readingTs : Number.POSITIVE_INFINITY;
+      isStaleReading = Boolean(data?.stale) || ageMs > STALE_MS;
       lastReadingTs = readingTs;
-      isStaleReading = Boolean(data?.stale);
       applyData(data);
 
       lastOkAt = Date.now();
@@ -410,11 +411,14 @@ function shiftDateKey(dateKey, daysDelta) {
     window.setInterval(() => {
       if (!lastReadingTs) return;
       const ageMs = Date.now() - lastReadingTs;
-      if (isStaleReading || ageMs > 7000) {
+      if (isStaleReading || ageMs > STALE_MS) {
+        isStaleReading = true;
         setStatus("stale", "Stale data");
         setLiveMetricsToZero();
       }
-      else setStatus("ok", "Connected");
+      else if (!isStaleReading) {
+        setStatus("ok", "Connected");
+      }
     }, 1000);
   }
   
