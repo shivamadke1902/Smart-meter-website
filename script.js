@@ -18,6 +18,7 @@ const els = {
   chartCanvas: document.getElementById("metricsChart"),
   weekChartCanvas: document.getElementById("weekChart"),
 };
+
 const apiBaseMeta = document.querySelector('meta[name="api-base"]');
 const configuredApiBase = apiBaseMeta?.content?.trim() || "";
 const DEFAULT_API_BASE = "https://smart-meter-website.onrender.com";
@@ -61,372 +62,370 @@ function shiftDateKey(dateKey, daysDelta) {
   ).padStart(2, "0")}`;
 }
 
-  console.log("dashboard script loaded");
-  let lastOkAt = 0;
-  let lastReadingTs = 0;
-  let inFlight = false;
-  let toastTimer = null;
-  let metricsChart = null;
-  let weekChart = null;
-  let chartLabels = [];
-  let chartData = [];
-  let weekLabels = [];
-  let weekData = [];
-  let firstErrorShown = false;
-  let debugTick = 0;
-  let isStaleReading = false;
-  const STALE_MS = 3000;
-  
-  function showToast(message) {
-    if (!els.toast) return;
-    els.toast.hidden = false;
-    els.toast.textContent = message;
-    if (toastTimer) window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => {
-      els.toast.hidden = true;
-      els.toast.textContent = "";
-    }, 3500);
+console.log("dashboard script loaded");
+let lastOkAt = 0;
+let lastReadingTs = 0;
+let inFlight = false;
+let toastTimer = null;
+let metricsChart = null;
+let weekChart = null;
+let chartLabels = [];
+let chartData = [];
+let weekLabels = [];
+let weekData = [];
+let firstErrorShown = false;
+let debugTick = 0;
+let isStaleReading = false;
+const STALE_MS = 3000;
+
+function showToast(message) {
+  if (!els.toast) return;
+  els.toast.hidden = false;
+  els.toast.textContent = message;
+  if (toastTimer) window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    els.toast.hidden = true;
+    els.toast.textContent = "";
+  }, 3500);
+}
+
+function bumpDebug() {
+  debugTick += 1;
+  if (els.metricsHint) {
+    const base = els.metricsHint.textContent || "";
+    if (!base.includes("• tick")) els.metricsHint.textContent = `${base} • tick ${debugTick}`.trim();
+    else els.metricsHint.textContent = base.replace(/• tick \d+/, `• tick ${debugTick}`);
+  }
+}
+
+function setStatus(kind, text) {
+  els.status?.classList.remove("is-ok", "is-stale", "is-bad");
+  if (kind === "ok") els.status?.classList.add("is-ok");
+  else if (kind === "stale") els.status?.classList.add("is-stale");
+  else if (kind === "bad") els.status?.classList.add("is-bad");
+  if (els.statusText) els.statusText.textContent = text;
+}
+
+function fmtNumber(value, { maxFrac = 2 } = {}) {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: maxFrac }).format(n);
+}
+
+function fmtDuration(seconds) {
+  const s = typeof seconds === "number" ? seconds : Number(seconds);
+  const MAX_OUTAGE_SECONDS = 6 * 60 * 60;
+  if (!Number.isFinite(s) || s <= 0 || s > MAX_OUTAGE_SECONDS) return "—";
+  if (s < 60) return `${fmtNumber(Math.round(s), { maxFrac: 0 })} sec`;
+  if (s < 3600) return `${fmtNumber(s / 60, { maxFrac: 1 })} min`;
+  return `${fmtNumber(s / 3600, { maxFrac: 1 })} hr`;
+}
+
+function setText(el, text) {
+  if (!el) return;
+  el.textContent = text;
+}
+
+function setLiveMetricsToZero() {
+  setText(els.voltage, "0");
+  setText(els.current, "0");
+  setText(els.power, "0");
+  setText(els.powerFactor, "0");
+}
+
+function updateLastUpdated(ts) {
+  if (!els.lastUpdated) return;
+  if (!ts) {
+    els.lastUpdated.textContent = "—";
+    els.lastUpdated.dateTime = "";
+    return;
+  }
+  const d = new Date(ts);
+  els.lastUpdated.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  els.lastUpdated.dateTime = d.toISOString();
+}
+
+// ── FIXED: applyData now takes `isStale` and decides internally.
+// Live metrics (voltage, current, power, pf) are zeroed when stale,
+// written only when the reading is genuinely fresh — all in one atomic step.
+// Cumulative fields (energy, cost, outage) are always applied regardless of staleness.
+function applyData(data, isStale) {
+  // Cumulative / historical fields — always show, even when MCU is offline
+  setText(els.todayEnergy, fmtNumber(data?.todayEnergyKwh, { maxFrac: 3 }));
+  setText(els.maxDemand,   fmtNumber(data?.todayMaxDemandKw, { maxFrac: 3 }));
+
+  if (els.todayCost && data?.todayCost != null) {
+    els.todayCost.textContent = fmtNumber(data.todayCost, { maxFrac: 2 });
   }
 
-  // Visible proof that JS is running (updates every fetch)
-  function bumpDebug() {
-    debugTick += 1;
-    if (els.metricsHint) {
-      const base = els.metricsHint.textContent || "";
-      // Keep it short; just shows activity count.
-      if (!base.includes("• tick")) els.metricsHint.textContent = `${base} • tick ${debugTick}`.trim();
-      else els.metricsHint.textContent = base.replace(/• tick \d+/, `• tick ${debugTick}`);
-    }
-  }
-  
-  function setStatus(kind, text) {
-    // kind: ok | stale | bad
-    els.status?.classList.remove("is-ok", "is-stale", "is-bad");
-    if (kind === "ok") els.status?.classList.add("is-ok");
-    else if (kind === "stale") els.status?.classList.add("is-stale");
-    else if (kind === "bad") els.status?.classList.add("is-bad");
-    if (els.statusText) els.statusText.textContent = text;
-  }
-  
-  function fmtNumber(value, { maxFrac = 2 } = {}) {
-    const n = typeof value === "number" ? value : Number(value);
-    if (!Number.isFinite(n)) return "—";
-    return new Intl.NumberFormat(undefined, { maximumFractionDigits: maxFrac }).format(n);
+  if (els.lastOutage) {
+    els.lastOutage.textContent = data?.lastOutage
+      ? new Date(data.lastOutage).toLocaleString()
+      : "—";
   }
 
-  function fmtDuration(seconds) {
-    const s = typeof seconds === "number" ? seconds : Number(seconds);
-    const MAX_OUTAGE_SECONDS = 6 * 60 * 60; // keep in sync with server
-    if (!Number.isFinite(s) || s <= 0 || s > MAX_OUTAGE_SECONDS) return "—";
-    if (s < 60) return `${fmtNumber(Math.round(s), { maxFrac: 0 })} sec`;
-    if (s < 3600) return `${fmtNumber(s / 60, { maxFrac: 1 })} min`;
-    return `${fmtNumber(s / 3600, { maxFrac: 1 })} hr`;
+  if (els.outageDuration) {
+    els.outageDuration.textContent = fmtDuration(data?.lastOutageDuration);
   }
 
-  function setText(el, text) {
-    if (!el) return;
-    el.textContent = text;
-  }
-
-  function setLiveMetricsToZero() {
-    setText(els.voltage, "0");
-    setText(els.current, "0");
-    setText(els.power, "0");
-    setText(els.powerFactor, "0");
-  }
-  
-  function updateLastUpdated(ts) {
-    if (!els.lastUpdated) return;
-    if (!ts) {
-      els.lastUpdated.textContent = "—";
-      els.lastUpdated.dateTime = "";
-      return;
-    }
-    const d = new Date(ts);
-    els.lastUpdated.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    els.lastUpdated.dateTime = d.toISOString();
-  }
-  
-  function applyData(data) {
-    setText(els.voltage, fmtNumber(data?.voltage, { maxFrac: 2 }));
-    setText(els.current, fmtNumber(data?.current, { maxFrac: 2 }));
-    setText(els.power, fmtNumber(data?.power, { maxFrac: 1 }));
+  // Live instantaneous fields — zero when stale, real values when fresh
+  if (isStale) {
+    setLiveMetricsToZero();
+  } else {
+    setText(els.voltage,     fmtNumber(data?.voltage,     { maxFrac: 2 }));
+    setText(els.current,     fmtNumber(data?.current,     { maxFrac: 2 }));
+    setText(els.power,       fmtNumber(data?.power,       { maxFrac: 1 }));
     setText(els.powerFactor, fmtNumber(data?.powerFactor, { maxFrac: 3 }));
-    setText(els.todayEnergy, fmtNumber(data?.todayEnergyKwh, { maxFrac: 3 }));
-    setText(els.maxDemand, fmtNumber(data?.todayMaxDemandKw, { maxFrac: 3 }));
-
-    if (els.todayCost && data?.todayCost != null) {
-      els.todayCost.textContent = fmtNumber(data.todayCost, { maxFrac: 2 });
-    }
-
-    if (els.lastOutage) {
-      if (data?.lastOutage) {
-        const d = new Date(data.lastOutage);
-        els.lastOutage.textContent = d.toLocaleString();
-      } else {
-        els.lastOutage.textContent = "—";
-      }
-    }
-
-    if (els.outageDuration) {
-      const dur = data?.lastOutageDuration;
-      els.outageDuration.textContent = fmtDuration(dur);
-    }
-
-    updateChart(data);
+    updateChart(data); // only push to chart when data is real
   }
-  
-  function initChart() {
-    if (!els.chartCanvas || !window.Chart || metricsChart) return;
-  
-    const ctx = els.chartCanvas.getContext("2d");
-    metricsChart = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: chartLabels,
-        datasets: [
-          {
-            label: "Power (W)",
-            data: chartData,
-            borderColor: "#111111",
-            backgroundColor: "rgba(0,0,0,0.04)",
-            borderWidth: 1.6,
-            tension: 0.2,
-            pointRadius: 2,
-            pointBackgroundColor: "#111111",
+}
+
+function initChart() {
+  if (!els.chartCanvas || !window.Chart || metricsChart) return;
+
+  const ctx = els.chartCanvas.getContext("2d");
+  metricsChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: chartLabels,
+      datasets: [
+        {
+          label: "Power (W)",
+          data: chartData,
+          borderColor: "#111111",
+          backgroundColor: "rgba(0,0,0,0.04)",
+          borderWidth: 1.6,
+          tension: 0.2,
+          pointRadius: 2,
+          pointBackgroundColor: "#111111",
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: {
+            color: "#111111",
+            font: { size: 11 },
           },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            labels: {
-              color: "#111111",
-              font: { size: 11 },
+        },
+        tooltip: {
+          mode: "index",
+          intersect: false,
+          callbacks: {
+            title(items) {
+              const item = items?.[0];
+              return item?.label ?? "";
             },
-          },
-          tooltip: {
-            mode: "index",
-            intersect: false,
-            callbacks: {
-              title(items) {
-                const item = items?.[0];
-                return item?.label ?? "";
-              },
-              label(item) {
-                const v = item.parsed.y;
-                const value = Number.isFinite(v) ? fmtNumber(v, { maxFrac: 1 }) : "—";
-                return `Power: ${value} W`;
-              },
+            label(item) {
+              const v = item.parsed.y;
+              const value = Number.isFinite(v) ? fmtNumber(v, { maxFrac: 1 }) : "—";
+              return `Power: ${value} W`;
             },
           },
         },
-        scales: {
-          x: {
-            ticks: { color: "#555555", maxRotation: 0 },
-            grid: { color: "rgba(0,0,0,0.04)" },
-          },
-          y: {
-            ticks: { color: "#555555" },
-            grid: { color: "rgba(0,0,0,0.06)" },
-          },
+      },
+      scales: {
+        x: {
+          ticks: { color: "#555555", maxRotation: 0 },
+          grid: { color: "rgba(0,0,0,0.04)" },
+        },
+        y: {
+          ticks: { color: "#555555" },
+          grid: { color: "rgba(0,0,0,0.06)" },
         },
       },
-    });
-  }
-  
-  function initWeekChart() {
-    if (!els.weekChartCanvas || !window.Chart || weekChart) return;
-    const ctx = els.weekChartCanvas.getContext("2d");
-    weekChart = new Chart(ctx, {
-      type: "bar",
-      data: {
-        labels: weekLabels,
-        datasets: [
-          {
-            label: "Energy (kWh)",
-            data: weekData,
-            backgroundColor: "rgba(37, 99, 235, 0.18)",
-            borderColor: "rgba(37, 99, 235, 0.9)",
-            borderWidth: 1.2,
-            borderRadius: 8,
-            barPercentage: 0.6,
-            categoryPercentage: 0.72,
-            maxBarThickness: 34,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            labels: { color: "#111111", font: { size: 11 } },
-          },
-          tooltip: {
-            mode: "index",
-            intersect: false,
-            callbacks: {
-              title(items) {
-                const item = items?.[0];
-                const label = item?.label ?? "";
-                return label ? `Day: ${label}` : "";
-              },
-              label(item) {
-                const v = item.parsed.y;
-                const value = Number.isFinite(v) ? fmtNumber(v, { maxFrac: 2 }) : "—";
-                return `Energy: ${value} kWh`;
-              },
+    },
+  });
+}
+
+function initWeekChart() {
+  if (!els.weekChartCanvas || !window.Chart || weekChart) return;
+  const ctx = els.weekChartCanvas.getContext("2d");
+  weekChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: weekLabels,
+      datasets: [
+        {
+          label: "Energy (kWh)",
+          data: weekData,
+          backgroundColor: "rgba(37, 99, 235, 0.18)",
+          borderColor: "rgba(37, 99, 235, 0.9)",
+          borderWidth: 1.2,
+          borderRadius: 8,
+          barPercentage: 0.6,
+          categoryPercentage: 0.72,
+          maxBarThickness: 34,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: { color: "#111111", font: { size: 11 } },
+        },
+        tooltip: {
+          mode: "index",
+          intersect: false,
+          callbacks: {
+            title(items) {
+              const item = items?.[0];
+              const label = item?.label ?? "";
+              return label ? `Day: ${label}` : "";
+            },
+            label(item) {
+              const v = item.parsed.y;
+              const value = Number.isFinite(v) ? fmtNumber(v, { maxFrac: 2 }) : "—";
+              return `Energy: ${value} kWh`;
             },
           },
         },
-        scales: {
-          x: {
-            ticks: { color: "#555555", maxRotation: 0 },
-            grid: { color: "rgba(0,0,0,0.04)" },
-          },
-          y: {
-            ticks: { color: "#555555" },
-            grid: { color: "rgba(0,0,0,0.06)" },
-          },
+      },
+      scales: {
+        x: {
+          ticks: { color: "#555555", maxRotation: 0 },
+          grid: { color: "rgba(0,0,0,0.04)" },
+        },
+        y: {
+          ticks: { color: "#555555" },
+          grid: { color: "rgba(0,0,0,0.06)" },
         },
       },
-    });
-  }
+    },
+  });
+}
 
-  function updateChart(data) {
-    if (!metricsChart) return;
-    const powerValue = Number(data?.power);
-    if (!Number.isFinite(powerValue)) return;
-  
-    const now = new Date();
-    const label = now.toLocaleTimeString([], { minute: "2-digit", second: "2-digit" });
-  
-    chartLabels.push(label);
-    chartData.push(powerValue);
-  
-    const maxPoints = 30;
-    if (chartLabels.length > maxPoints) chartLabels.shift();
-    if (chartData.length > maxPoints) chartData.shift();
-  
-    metricsChart.update("none");
-  }
-  
-  async function fetchWeek() {
-    try {
-      const res = await fetch(apiUrl("/stats/week"), { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const payload = await res.json();
-      const days = Array.isArray(payload?.days) ? payload.days : [];
-      const byKey = new Map();
-      for (const d of days) {
-        if (!d || typeof d.dateKey !== "string") continue;
-        byKey.set(d.dateKey, Number(d?.energyKwh) || 0);
-      }
+function updateChart(data) {
+  if (!metricsChart) return;
+  const powerValue = Number(data?.power);
+  if (!Number.isFinite(powerValue)) return;
 
-      const todayKey = formatDateKey(new Date());
-      let anchorKey = todayKey;
-      for (const d of days) {
-        if (d?.dateKey && d.dateKey > anchorKey) anchorKey = d.dateKey;
-      }
+  const now = new Date();
+  const label = now.toLocaleTimeString([], { minute: "2-digit", second: "2-digit" });
 
-      weekLabels.length = 0;
-      weekData.length = 0;
-      for (let i = 6; i >= 0; i -= 1) {
-        const dateKey = shiftDateKey(anchorKey, -i);
-        weekLabels.push(dateKey.slice(5));
-        weekData.push(byKey.get(dateKey) ?? 0);
-      }
-      weekChart?.update("none");
-    } catch {
-      // silent; weekly view is non-critical
+  chartLabels.push(label);
+  chartData.push(powerValue);
+
+  const maxPoints = 30;
+  if (chartLabels.length > maxPoints) chartLabels.shift();
+  if (chartData.length > maxPoints) chartData.shift();
+
+  metricsChart.update("none");
+}
+
+async function fetchWeek() {
+  try {
+    const res = await fetch(apiUrl("/stats/week"), { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+    const days = Array.isArray(payload?.days) ? payload.days : [];
+    const byKey = new Map();
+    for (const d of days) {
+      if (!d || typeof d.dateKey !== "string") continue;
+      byKey.set(d.dateKey, Number(d?.energyKwh) || 0);
     }
+
+    const todayKey = formatDateKey(new Date());
+    let anchorKey = todayKey;
+    for (const d of days) {
+      if (d?.dateKey && d.dateKey > anchorKey) anchorKey = d.dateKey;
+    }
+
+    weekLabels.length = 0;
+    weekData.length = 0;
+    for (let i = 6; i >= 0; i -= 1) {
+      const dateKey = shiftDateKey(anchorKey, -i);
+      weekLabels.push(dateKey.slice(5));
+      weekData.push(byKey.get(dateKey) ?? 0);
+    }
+    weekChart?.update("none");
+  } catch {
+    // silent; weekly view is non-critical
   }
+}
 
-  async function fetchOnce({ userInitiated = false } = {}) {
-    if (inFlight) return;
-    inFlight = true;
-  
-    try {
-      // Prefer /api/data to avoid collisions with static /data directories.
-      let res = await fetch(apiUrl("/api/data"), { cache: "no-store" });
-      if (!res.ok) {
-        // Backward compatibility for older deployments that only expose /data.
-        res = await fetch(apiUrl("/data"), { cache: "no-store" });
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      bumpDebug();
+// ── FIXED: stale flag is computed BEFORE applyData is called.
+// applyData receives the flag and makes the zero/real decision atomically.
+async function fetchOnce({ userInitiated = false } = {}) {
+  if (inFlight) return;
+  inFlight = true;
 
-      let readingTs = Number(data?.ts);
-      if (!Number.isFinite(readingTs)) {
-        readingTs = 0;
-      }
+  try {
+    let res = await fetch(apiUrl("/api/data"), { cache: "no-store" });
+    if (!res.ok) {
+      res = await fetch(apiUrl("/data"), { cache: "no-store" });
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    bumpDebug();
 
-      const ageMs = readingTs > 0 ? Date.now() - readingTs : Number.POSITIVE_INFINITY;
-      isStaleReading = Boolean(data?.stale) || ageMs > STALE_MS;
-      lastReadingTs = readingTs;
-      applyData(data);
+    let readingTs = Number(data?.ts);
+    if (!Number.isFinite(readingTs)) readingTs = 0;
 
-      lastOkAt = Date.now();
-      if (isStaleReading) {
-        setStatus("stale", "Stale data");
-        setLiveMetricsToZero();
-      } else {
-        setStatus("ok", "Connected");
-      }
-      updateLastUpdated(readingTs);
-      if (els.metricsHint) {
-        els.metricsHint.textContent = isStaleReading
-          ? "MCU offline - showing stale status"
-          : "Live readings";
-      }
-      if (userInitiated) showToast("Updated.");
-    } catch (err) {
-      // Treat fetch failures as stale live stream until fresh data resumes.
-      setStatus("stale", "Stale data");
+    const ageMs = readingTs > 0 ? Date.now() - readingTs : Number.POSITIVE_INFINITY;
+
+    // Compute stale FIRST — then pass it into applyData so DOM is written correctly in one shot
+    isStaleReading = Boolean(data?.stale) || ageMs > STALE_MS;
+    lastReadingTs = readingTs;
+
+    applyData(data, isStaleReading);
+
+    lastOkAt = Date.now();
+    setStatus(isStaleReading ? "stale" : "ok", isStaleReading ? "Stale data" : "Connected");
+    updateLastUpdated(readingTs);
+
+    if (els.metricsHint) {
+      els.metricsHint.textContent = isStaleReading
+        ? "MCU offline — showing stale status"
+        : "Live readings";
+    }
+    if (userInitiated) showToast("Updated.");
+  } catch (err) {
+    // Fetch failed entirely — treat as stale immediately
+    isStaleReading = true;
+    setLiveMetricsToZero();
+    setStatus("stale", "Stale data");
+    const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
+    if (els.metricsHint) {
+      els.metricsHint.textContent = msg || "Unable to fetch latest reading";
+    }
+    if (userInitiated) showToast("Couldn't refresh. Check the server and network.");
+    else if (!firstErrorShown) {
+      firstErrorShown = true;
+      showToast("Disconnected. Check server/network.");
+    }
+  } finally {
+    inFlight = false;
+  }
+}
+
+// ── FIXED: watcher runs at 500 ms (was 1000 ms) for faster response.
+// Only acts when isStaleReading is still false but the reading age says otherwise —
+// this closes the gap window between fetch cycles when MCU cuts out mid-poll.
+function startStaleWatcher() {
+  window.setInterval(() => {
+    if (!lastReadingTs) return;
+    const ageMs = Date.now() - lastReadingTs;
+    if (ageMs > STALE_MS && !isStaleReading) {
       isStaleReading = true;
+      setStatus("stale", "Stale data");
       setLiveMetricsToZero();
-      const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
-      if (els.metricsHint) {
-        els.metricsHint.textContent = msg || "Unable to fetch latest reading";
-      }
-      if (userInitiated) showToast("Couldn’t refresh. Check the server and network.");
-      else if (!firstErrorShown) {
-        firstErrorShown = true;
-        showToast("Disconnected. Check server/network.");
-      }
-    } finally {
-      inFlight = false;
     }
-  }
-  
-  function startStaleWatcher() {
-    window.setInterval(() => {
-      if (!lastReadingTs) return;
-      const ageMs = Date.now() - lastReadingTs;
-      if (isStaleReading || ageMs > STALE_MS) {
-        isStaleReading = true;
-        setStatus("stale", "Stale data");
-        setLiveMetricsToZero();
-      }
-      else if (!isStaleReading) {
-        setStatus("ok", "Connected");
-      }
-    }, 1000);
-  }
-  
-  els.refreshBtn?.addEventListener("click", () => fetchOnce({ userInitiated: true }));
-  
-  // Initial load + polling
-  initChart();
-  initWeekChart();
-  fetchWeek();
-  fetchOnce();
-  window.setInterval(fetchOnce, 2000);
-  window.setInterval(fetchWeek, 15000);
-  startStaleWatcher();
+  }, 500);
+}
 
+els.refreshBtn?.addEventListener("click", () => fetchOnce({ userInitiated: true }));
 
+// Initial load + polling
+initChart();
+initWeekChart();
+fetchWeek();
+fetchOnce();
+window.setInterval(fetchOnce, 2000);
+window.setInterval(fetchWeek, 15000);
+startStaleWatcher();
