@@ -28,6 +28,16 @@ const ALLOWED_ORIGINS = new Set(
     .map((origin) => origin.trim())
     .filter(Boolean)
 );
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  try {
+    const u = new URL(origin);
+    return u.protocol === "https:" && u.hostname.endsWith(".github.io");
+  } catch {
+    return false;
+  }
+}
 const pool = DATABASE_URL
   ? new Pool({
       connectionString: DATABASE_URL,
@@ -256,7 +266,7 @@ function persistTodayState() {
 
 app.use((req, res, next) => {
   const origin = req.get("origin");
-  if (origin && ALLOWED_ORIGINS.has(origin)) {
+  if (isAllowedOrigin(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   }

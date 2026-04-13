@@ -27,6 +27,8 @@ const normalizedConfiguredApiBase =
     : "";
 const API_BASE = normalizedConfiguredApiBase
   ? normalizedConfiguredApiBase
+  : window.location.protocol === "file:"
+    ? DEFAULT_API_BASE
   : window.location.hostname.endsWith("github.io")
     ? DEFAULT_API_BASE
     : window.location.origin;
