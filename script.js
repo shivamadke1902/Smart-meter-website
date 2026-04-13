@@ -44,6 +44,23 @@ function apiUrl(path) {
   return `${API_BASE}${path}`;
 }
 
+function formatDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function shiftDateKey(dateKey, daysDelta) {
+  const [y, m, d] = String(dateKey).split("-").map(Number);
+  if (!y || !m || !d) return formatDateKey(new Date());
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + daysDelta);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    dt.getUTCDate()
+  ).padStart(2, "0")}`;
+}
+
   console.log("dashboard script loaded");
   let lastOkAt = 0;
   let lastReadingTs = 0;
@@ -226,6 +243,9 @@ function apiUrl(path) {
             borderColor: "rgba(37, 99, 235, 0.9)",
             borderWidth: 1.2,
             borderRadius: 8,
+            barPercentage: 0.6,
+            categoryPercentage: 0.72,
+            maxBarThickness: 34,
           },
         ],
       },
@@ -291,12 +311,24 @@ function apiUrl(path) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const payload = await res.json();
       const days = Array.isArray(payload?.days) ? payload.days : [];
+      const byKey = new Map();
+      for (const d of days) {
+        if (!d || typeof d.dateKey !== "string") continue;
+        byKey.set(d.dateKey, Number(d?.energyKwh) || 0);
+      }
+
+      const todayKey = formatDateKey(new Date());
+      let anchorKey = todayKey;
+      for (const d of days) {
+        if (d?.dateKey && d.dateKey > anchorKey) anchorKey = d.dateKey;
+      }
 
       weekLabels.length = 0;
       weekData.length = 0;
-      for (const d of days) {
-        weekLabels.push(d?.label ?? d?.dateKey ?? "");
-        weekData.push(Number(d?.energyKwh) || 0);
+      for (let i = 6; i >= 0; i -= 1) {
+        const dateKey = shiftDateKey(anchorKey, -i);
+        weekLabels.push(dateKey.slice(5));
+        weekData.push(byKey.get(dateKey) ?? 0);
       }
       weekChart?.update("none");
     } catch {
