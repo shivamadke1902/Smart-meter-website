@@ -271,17 +271,20 @@ function persistTodayState() {
 }
 
 app.use((req, res, next) => {
-  const origin = req.get("origin");
-  if (isAllowedOrigin(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-  }
+  // Allow ALL origins (perfect for public IoT dashboard)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
+  // Allowed methods
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+
+  // Allowed headers
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
+  // Handle preflight requests
   if (req.method === "OPTIONS") {
     return res.sendStatus(204);
   }
+
   next();
 });
 
