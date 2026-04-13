@@ -76,7 +76,7 @@ let weekData = [];
 let firstErrorShown = false;
 let debugTick = 0;
 let isStaleReading = false;
-const STALE_MS = 3000;
+const STALE_MS = 7000;
 
 function showToast(message) {
   if (!els.toast) return;
