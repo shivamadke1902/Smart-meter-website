@@ -25,8 +25,15 @@ const normalizedConfiguredApiBase =
   configuredApiBase && !configuredApiBase.includes("YOUR-RENDER-SERVICE")
     ? configuredApiBase.replace(/\/+$/, "")
     : "";
+const localHostApiBase =
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") &&
+  window.location.port !== "3000"
+    ? `${window.location.protocol}//${window.location.hostname}:3000`
+    : "";
 const API_BASE = normalizedConfiguredApiBase
   ? normalizedConfiguredApiBase
+  : localHostApiBase
+    ? localHostApiBase
   : window.location.protocol === "file:"
     ? DEFAULT_API_BASE
   : window.location.hostname.endsWith("github.io")

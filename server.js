@@ -33,6 +33,12 @@ function isAllowedOrigin(origin) {
   if (ALLOWED_ORIGINS.has(origin)) return true;
   try {
     const u = new URL(origin);
+    if (
+      u.protocol === "http:" &&
+      (u.hostname === "localhost" || u.hostname === "127.0.0.1")
+    ) {
+      return true;
+    }
     return u.protocol === "https:" && u.hostname.endsWith(".github.io");
   } catch {
     return false;
