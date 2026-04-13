@@ -74,6 +74,7 @@ function shiftDateKey(dateKey, daysDelta) {
   let weekData = [];
   let firstErrorShown = false;
   let debugTick = 0;
+  let isStaleReading = false;
   
   function showToast(message) {
     if (!els.toast) return;
@@ -365,16 +366,27 @@ function shiftDateKey(dateKey, daysDelta) {
       }
 
       lastReadingTs = readingTs;
+      isStaleReading = Boolean(data?.stale);
       applyData(data);
 
       lastOkAt = Date.now();
-      setStatus("ok", "Connected");
+      if (isStaleReading) {
+        setStatus("stale", "Stale data");
+        setLiveMetricsToZero();
+      } else {
+        setStatus("ok", "Connected");
+      }
       updateLastUpdated(readingTs);
-      if (els.metricsHint) els.metricsHint.textContent = "Live readings";
+      if (els.metricsHint) {
+        els.metricsHint.textContent = isStaleReading
+          ? "MCU offline - showing stale status"
+          : "Live readings";
+      }
       if (userInitiated) showToast("Updated.");
     } catch (err) {
       // Keep previous values, but reflect state clearly.
       setStatus("bad", "Disconnected");
+      isStaleReading = true;
       setLiveMetricsToZero();
       const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
       if (els.metricsHint) {
@@ -398,7 +410,7 @@ function shiftDateKey(dateKey, daysDelta) {
     window.setInterval(() => {
       if (!lastReadingTs) return;
       const ageMs = Date.now() - lastReadingTs;
-      if (ageMs > 7000) {
+      if (isStaleReading || ageMs > 7000) {
         setStatus("stale", "Stale data");
         setLiveMetricsToZero();
       }
