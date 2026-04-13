@@ -289,9 +289,6 @@ function buildLivePayload() {
     current: 0,
     power: 0,
     powerFactor: 0,
-    todayEnergyKwh: 0,
-    todayMaxDemandKw: 0,
-    todayCost: 0,
     stale: true,
   };
 }

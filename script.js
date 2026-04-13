@@ -131,9 +131,6 @@ function shiftDateKey(dateKey, daysDelta) {
     setText(els.current, "0");
     setText(els.power, "0");
     setText(els.powerFactor, "0");
-    setText(els.todayEnergy, "0");
-    setText(els.maxDemand, "0");
-    setText(els.todayCost, "0");
   }
   
   function updateLastUpdated(ts) {
