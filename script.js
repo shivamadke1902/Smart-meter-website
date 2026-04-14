@@ -85,6 +85,8 @@ let firstErrorShown = false;
 let debugTick = 0;
 let isStaleReading = false;
 const STALE_MS = 7000;
+const STALE_ZERO_DELAY_MS = 5000;
+let staleSinceMs = null;
 
 // In-memory cache of the last known good Today values.
 // Populated from /stats/today on load and kept current by applyData.
@@ -95,6 +97,7 @@ let cachedToday = {
   cost: null,
   carbonFootprintG: null,
 };
+let cachedTodayDateKey = null;
 
 function showToast(message) {
   if (!els.toast) return;
@@ -229,10 +232,17 @@ function applyData(data, isStale) {
     els.outageDuration.textContent = fmtDuration(data?.lastOutageDuration);
   }
 
-  // Live instantaneous fields — zero when stale, real values when fresh
+  // Live instantaneous fields:
+  // - fresh => show real values immediately
+  // - stale => wait 5s, then zero out
   if (isStale) {
-    setLiveMetricsToZero();
+    if (staleSinceMs === null) staleSinceMs = Date.now();
+    const staleForMs = Date.now() - staleSinceMs;
+    if (staleForMs >= STALE_ZERO_DELAY_MS) {
+      setLiveMetricsToZero();
+    }
   } else {
+    staleSinceMs = null;
     setText(els.voltage,     fmtNumber(data?.voltage,     { maxFrac: 2 }));
     setText(els.current,     fmtNumber(data?.current,     { maxFrac: 2 }));
     setText(els.power,       fmtNumber(data?.power,       { maxFrac: 1 }));
@@ -418,10 +428,23 @@ async function fetchTodayStats() {
     const res = await fetch(apiUrl("/stats/today"), { cache: "no-store" });
     if (!res.ok) return;
     const data = await res.json();
+    const dateKey = typeof data?.dateKey === "string" ? data.dateKey : null;
     const energyKwh   = Number(data?.energyKwh);
     const maxDemandKw = Number(data?.maxDemandKw);
     const cost        = Number(data?.todayCost);
     const carbonFootprintG = Number(data?.carbonFootprintG);
+
+    // Keep Today metrics sticky for the current day only.
+    // Reset exactly when server day changes.
+    if (dateKey && cachedTodayDateKey && dateKey !== cachedTodayDateKey) {
+      cachedToday = {
+        energyKwh: null,
+        maxDemandKw: null,
+        cost: null,
+        carbonFootprintG: null,
+      };
+    }
+    if (dateKey) cachedTodayDateKey = dateKey;
 
     // Keep cache synced with DB-backed /stats/today values
     if (Number.isFinite(energyKwh)) cachedToday.energyKwh = energyKwh;
@@ -511,11 +534,17 @@ function startStaleWatcher() {
     const ageMs = Date.now() - lastReadingTs;
     if (ageMs > STALE_MS && !isStaleReading) {
       isStaleReading = true;
+      if (staleSinceMs === null) staleSinceMs = Date.now();
       setStatus("stale", "Stale data");
-      setLiveMetricsToZero();
       // Today section keeps its last rendered values — no action needed
       if (els.todayHint) {
         els.todayHint.textContent = "Showing last known values (MCU offline)";
+      }
+    }
+    if (isStaleReading && staleSinceMs !== null) {
+      const staleForMs = Date.now() - staleSinceMs;
+      if (staleForMs >= STALE_ZERO_DELAY_MS) {
+        setLiveMetricsToZero();
       }
     }
   }, 500);
