@@ -247,6 +247,10 @@ body{
   color: var(--text-muted);
 }
 
+.panel__hint--below{
+  margin-top: 12px;
+}
+
 /* Metrics Grid */
 .metrics{
   display: grid;

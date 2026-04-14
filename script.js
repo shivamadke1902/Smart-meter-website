@@ -16,6 +16,7 @@ const els = {
   refreshBtn: document.getElementById("refreshBtn"),
   metricsHint: document.getElementById("metricsHint"),
   todayHint: document.getElementById("todayHint"),
+  todayMaxComparison: document.getElementById("todayMaxComparison"),
   toast: document.getElementById("toast"),
   chartCanvas: document.getElementById("metricsChart"),
   weekChartCanvas: document.getElementById("weekChart"),
@@ -66,6 +67,13 @@ function parseOptionalNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function keepMonotonicNumber(nextValue, currentValue) {
+  const next = parseOptionalNumber(nextValue);
+  if (!Number.isFinite(next)) return currentValue;
+  if (!Number.isFinite(currentValue)) return next;
+  return next >= currentValue ? next : currentValue;
+}
+
 function shiftDateKey(dateKey, daysDelta) {
   const [y, m, d] = String(dateKey).split("-").map(Number);
   if (!y || !m || !d) return formatDateKey(new Date());
@@ -104,6 +112,7 @@ let cachedToday = {
   carbonFootprintG: null,
 };
 let cachedTodayDateKey = null;
+let previousDayMaxDemandKw = null;
 
 function showToast(message) {
   if (!els.toast) return;
@@ -176,12 +185,12 @@ function updateLastUpdated(ts) {
 // Priority: live data fields from the polling response > cachedToday from /stats/today.
 // This ensures the section is never blank even when the MCU is offline.
 function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
-  // Resolve: use provided value if valid, else fall back to cache
-  const resolvedEnergy   = Number.isFinite(Number(energyKwh))   ? Number(energyKwh)   : cachedToday.energyKwh;
-  const resolvedDemand   = Number.isFinite(Number(maxDemandKw))  ? Number(maxDemandKw) : cachedToday.maxDemandKw;
+  // Resolve cumulative values monotonically so transient 0/reset payloads never overwrite the day total.
+  const resolvedEnergy = keepMonotonicNumber(energyKwh, cachedToday.energyKwh);
+  const resolvedDemand = keepMonotonicNumber(maxDemandKw, cachedToday.maxDemandKw);
 
   // Cost: derive from energy if not directly provided (matches server logic)
-  let resolvedCost = Number.isFinite(Number(cost)) ? Number(cost) : null;
+  let resolvedCost = keepMonotonicNumber(cost, cachedToday.cost);
   if (resolvedCost === null && resolvedEnergy !== null) {
     resolvedCost = resolvedEnergy * COST_PER_KWH;
   }
@@ -189,7 +198,7 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
     resolvedCost = cachedToday.cost;
   }
 
-  let resolvedCarbon = Number.isFinite(Number(carbonFootprintG)) ? Number(carbonFootprintG) : null;
+  let resolvedCarbon = keepMonotonicNumber(carbonFootprintG, cachedToday.carbonFootprintG);
   if (resolvedCarbon === null && resolvedEnergy !== null) {
     resolvedCarbon = resolvedEnergy * CO2_GRAMS_PER_KWH;
   }
@@ -214,22 +223,56 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
         ? fmtNumber(cachedToday.carbonFootprintG, { maxFrac: 3 })
         : "—";
   }
+
+  updateTodayMaxComparison();
+}
+
+function updateTodayMaxComparison() {
+  if (!els.todayMaxComparison) return;
+
+  const todayMax = cachedToday.maxDemandKw;
+  const previousMax = previousDayMaxDemandKw;
+
+  if (!Number.isFinite(todayMax)) {
+    els.todayMaxComparison.textContent =
+      "Maximum load comparison will appear once today's maximum demand is available.";
+    return;
+  }
+
+  if (!Number.isFinite(previousMax)) {
+    els.todayMaxComparison.textContent = "Previous-day maximum load comparison unavailable.";
+    return;
+  }
+
+  if (previousMax <= 0) {
+    els.todayMaxComparison.textContent =
+      todayMax <= 0
+        ? "Maximum load is unchanged from yesterday at 0%."
+        : "Yesterday's maximum load was 0, so a percentage comparison is unavailable.";
+    return;
+  }
+
+  const changePct = ((todayMax - previousMax) / previousMax) * 100;
+  const absChangePct = Math.abs(changePct);
+
+  if (absChangePct < 0.05) {
+    els.todayMaxComparison.textContent = "Maximum load is nearly unchanged from yesterday.";
+    return;
+  }
+
+  els.todayMaxComparison.textContent =
+    changePct >= 0
+      ? `Maximum load has grown by ${fmtNumber(absChangePct, { maxFrac: 2 })}% from the day before.`
+      : `Maximum load is down by ${fmtNumber(absChangePct, { maxFrac: 2 })}% from the day before.`;
 }
 
 function applyData(data, isStale) {
-  // Keep Today section cumulative and DB-backed, but if the cache is still empty/zero,
-  // seed it from the live cumulative fields instead of flashing 0.
-  const liveTodayEnergy = parseOptionalNumber(data?.todayEnergyKwh);
-  const shouldSeedTodayFromLive =
-    (!Number.isFinite(cachedToday.energyKwh) || cachedToday.energyKwh <= 0) &&
-    Number.isFinite(liveTodayEnergy) &&
-    liveTodayEnergy > 0;
-
+  // Keep Today section cumulative using live values, but never let resets/zero flashes reduce it.
   applyTodayMetrics(
-    shouldSeedTodayFromLive ? data?.todayEnergyKwh : null,
-    shouldSeedTodayFromLive ? data?.todayMaxDemandKw : null,
-    shouldSeedTodayFromLive ? data?.todayCost : null,
-    shouldSeedTodayFromLive ? data?.todayCarbonFootprintG : null
+    data?.todayEnergyKwh,
+    data?.todayMaxDemandKw,
+    data?.todayCost,
+    data?.todayCarbonFootprintG
   );
 
   // Update the Today section hint to indicate data source
@@ -413,9 +456,11 @@ async function fetchWeek() {
     const payload = await res.json();
     const days = Array.isArray(payload?.days) ? payload.days : [];
     const byKey = new Map();
+    const maxDemandByKey = new Map();
     for (const d of days) {
       if (!d || typeof d.dateKey !== "string") continue;
       byKey.set(d.dateKey, parseOptionalNumber(d?.energyKwh));
+      maxDemandByKey.set(d.dateKey, parseOptionalNumber(d?.maxDemandKw));
     }
 
     const todayKey = formatDateKey(new Date());
@@ -431,6 +476,8 @@ async function fetchWeek() {
       weekLabels.push(dateKey.slice(5));
       weekData.push(byKey.get(dateKey) ?? 0);
     }
+    previousDayMaxDemandKw = maxDemandByKey.get(shiftDateKey(todayKey, -1)) ?? null;
+    updateTodayMaxComparison();
     weekChart?.update("none");
   } catch {
     // silent; weekly view is non-critical
@@ -510,8 +557,6 @@ async function fetchOnce({ userInitiated = false } = {}) {
   inFlight = true;
 
   try {
-    await fetchTodayStats();
-
     let res = await fetch(apiUrl("/api/data"), { cache: "no-store" });
     if (!res.ok) {
       res = await fetch(apiUrl("/data"), { cache: "no-store" });
