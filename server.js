@@ -77,11 +77,20 @@ async function ensureDbSchema() {
       power_w double precision,
       energy_kwh double precision,
       power_factor double precision,
-      carbon_footprint_g double precision
+      energy_used double precision,
+      maximum_demand double precision,
+      cost_today double precision,
+      carbon_footprint double precision
     );
 
     ALTER TABLE energy_samples
-      ADD COLUMN IF NOT EXISTS carbon_footprint_g double precision;
+      ADD COLUMN IF NOT EXISTS energy_used double precision;
+    ALTER TABLE energy_samples
+      ADD COLUMN IF NOT EXISTS maximum_demand double precision;
+    ALTER TABLE energy_samples
+      ADD COLUMN IF NOT EXISTS cost_today double precision;
+    ALTER TABLE energy_samples
+      ADD COLUMN IF NOT EXISTS carbon_footprint double precision;
   `);
 }
 
@@ -107,14 +116,18 @@ async function dbInsertSampleFromSensor() {
   if (!pool) return;
   if (!sensorData || Object.keys(sensorData).length === 0) return;
 
-  const { voltage, current, power, energy, powerFactor, todayEnergyKwh } = sensorData;
+  const { voltage, current, power, energy, powerFactor, todayEnergyKwh, todayMaxDemandKw, todayCost } =
+    sensorData;
   const sampleCarbonFootprintG =
     clampNumber(todayEnergyKwh) != null ? clampNumber(todayEnergyKwh) * CO2_GRAMS_PER_KWH : null;
 
   await pool.query(
     `
-    INSERT INTO energy_samples (ts, voltage, current, power_w, energy_kwh, power_factor, carbon_footprint_g)
-    VALUES (to_timestamp($1 / 1000.0), $2, $3, $4, $5, $6, $7);
+    INSERT INTO energy_samples (
+      ts, voltage, current, power_w, energy_kwh, power_factor,
+      energy_used, maximum_demand, cost_today, carbon_footprint
+    )
+    VALUES (to_timestamp($1 / 1000.0), $2, $3, $4, $5, $6, $7, $8, $9, $10);
   `,
     [
       sensorData.ts ?? Date.now(),
@@ -123,6 +136,9 @@ async function dbInsertSampleFromSensor() {
       clampNumber(power),
       clampNumber(energy),
       clampNumber(powerFactor),
+      clampNumber(todayEnergyKwh),
+      clampNumber(todayMaxDemandKw),
+      clampNumber(todayCost),
       sampleCarbonFootprintG,
     ]
   );
