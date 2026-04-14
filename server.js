@@ -429,10 +429,14 @@ function rolloverIfNeeded(now = new Date()) {
 
   if (prevEnergyKwh != null) {
     const existingIdx = history.findIndex((d) => d?.dateKey === prevKey);
+    const prevTodayCost = prevEnergyKwh * COST_PER_KWH;
+    const prevCarbonFootprintG = prevEnergyKwh * CO2_GRAMS_PER_KWH;
     const entry = {
       dateKey: prevKey,
       energyKwh: prevEnergyKwh,
       maxDemandKw: todayMaxDemandKw,
+      todayCost: prevTodayCost,
+      carbonFootprintG: prevCarbonFootprintG,
     };
     if (existingIdx >= 0) history[existingIdx] = entry;
     else history.push(entry);
@@ -495,13 +499,15 @@ function applyIncomingReading(obj) {
   };
   persistTodayState();
 
-  dbUpsertDay({
-    dateKey: activeDayKey,
-    energyKwh: todayEnergyKwh ?? 0,
-    maxDemandKw: todayMaxDemandKw ?? 0,
-    todayCost: todayCost ?? 0,
-    carbonFootprintG: todayCarbonFootprintG ?? 0,
-  }).catch((e) => console.error("DB upsert failed:", e.message));
+  if (todayEnergyKwh != null) {
+    dbUpsertDay({
+      dateKey: activeDayKey,
+      energyKwh: todayEnergyKwh,
+      maxDemandKw: todayMaxDemandKw ?? 0,
+      todayCost: todayCost ?? 0,
+      carbonFootprintG: todayCarbonFootprintG ?? 0,
+    }).catch((e) => console.error("DB upsert failed:", e.message));
+  }
 
   lastSampleAtMs = Date.now();
 }
@@ -521,10 +527,10 @@ app.get("/stats/today", (req, res) => {
       if (dbToday) {
         return res.json({
           dateKey: dbToday.dateKey,
-          energyKwh: clampNumber(dbToday.energyKwh) ?? 0,
-          maxDemandKw: clampNumber(dbToday.maxDemandKw) ?? 0,
-          todayCost: clampNumber(dbToday.todayCost) ?? 0,
-          carbonFootprintG: clampNumber(dbToday.carbonFootprintG) ?? 0,
+          energyKwh: clampNumber(dbToday.energyKwh),
+          maxDemandKw: clampNumber(dbToday.maxDemandKw),
+          todayCost: clampNumber(dbToday.todayCost),
+          carbonFootprintG: clampNumber(dbToday.carbonFootprintG),
           ts: dbToday.updatedAt ? new Date(dbToday.updatedAt).getTime() : sensorData?.ts ?? null,
         });
       }

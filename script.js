@@ -422,17 +422,17 @@ async function fetchTodayStats() {
     const cost        = Number(data?.todayCost);
     const carbonFootprintG = Number(data?.carbonFootprintG);
 
-    // Only seed cache — do not overwrite values that applyData may have already set
-    if (Number.isFinite(energyKwh)   && cachedToday.energyKwh   === null) cachedToday.energyKwh   = energyKwh;
-    if (Number.isFinite(maxDemandKw) && cachedToday.maxDemandKw === null) cachedToday.maxDemandKw = maxDemandKw;
-    if (Number.isFinite(cost)        && cachedToday.cost         === null) {
+    // Keep cache synced with DB-backed /stats/today values
+    if (Number.isFinite(energyKwh)) cachedToday.energyKwh = energyKwh;
+    if (Number.isFinite(maxDemandKw)) cachedToday.maxDemandKw = maxDemandKw;
+    if (Number.isFinite(cost)) {
       cachedToday.cost = cost;
-    } else if (cachedToday.cost === null && Number.isFinite(energyKwh)) {
+    } else if (Number.isFinite(energyKwh)) {
       cachedToday.cost = energyKwh * COST_PER_KWH;
     }
-    if (Number.isFinite(carbonFootprintG) && cachedToday.carbonFootprintG === null) {
+    if (Number.isFinite(carbonFootprintG)) {
       cachedToday.carbonFootprintG = carbonFootprintG;
-    } else if (cachedToday.carbonFootprintG === null && Number.isFinite(energyKwh)) {
+    } else if (Number.isFinite(energyKwh)) {
       cachedToday.carbonFootprintG = energyKwh * CO2_GRAMS_PER_KWH;
     }
 
