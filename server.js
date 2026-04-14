@@ -167,6 +167,42 @@ async function dbReadTodayStats(dateKey) {
   if (!pool) return null;
   const { rows } = await pool.query(
     `
+    WITH day_samples AS (
+      SELECT ts, power_w, energy_kwh
+      FROM energy_samples
+      WHERE to_char(ts AT TIME ZONE $2, 'YYYY-MM-DD') = $1
+    )
+    SELECT $1 as "dateKey",
+           CASE
+             WHEN COUNT(*) FILTER (WHERE energy_kwh IS NOT NULL) = 0 THEN NULL
+             ELSE GREATEST(COALESCE(MAX(energy_kwh), 0) - COALESCE(MIN(energy_kwh), 0), 0)
+           END as "energyKwh",
+           CASE
+             WHEN COUNT(*) FILTER (WHERE power_w IS NOT NULL) = 0 THEN NULL
+             ELSE COALESCE(MAX(power_w), 0) / 1000.0
+           END as "maxDemandKw",
+           MAX(ts) as "updatedAt"
+    FROM day_samples
+    HAVING COUNT(*) > 0;
+  `,
+    [dateKey, APP_TIME_ZONE]
+  );
+
+  const row = rows[0];
+  if (row) {
+    const energyKwh = clampNumber(row.energyKwh);
+    return {
+      dateKey: row.dateKey,
+      energyKwh,
+      maxDemandKw: clampNumber(row.maxDemandKw),
+      todayCost: energyKwh != null ? energyKwh * COST_PER_KWH : null,
+      carbonFootprintG: energyKwh != null ? energyKwh * CO2_GRAMS_PER_KWH : null,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  const { rows: dailyRows } = await pool.query(
+    `
     SELECT date_key as "dateKey",
            energy_kwh as "energyKwh",
            max_demand_kw as "maxDemandKw",
@@ -179,7 +215,7 @@ async function dbReadTodayStats(dateKey) {
   `,
     [dateKey]
   );
-  return rows[0] ?? null;
+  return dailyRows[0] ?? null;
 }
 
 // Aggregate all days from the high-frequency samples table
@@ -288,21 +324,18 @@ let sensorData = {};
 let history = readHistory(); // [{ dateKey, energyKwh, maxDemandKw }]
 const persistedDayState = readDayState();
 const todayKey = dayKey();
-let activeDayKey =
+const persistedDayKey =
   persistedDayState?.activeDayKey && typeof persistedDayState.activeDayKey === "string"
     ? persistedDayState.activeDayKey
-    : todayKey;
-if (activeDayKey !== todayKey) {
-  activeDayKey = todayKey;
-}
-let dayStartEnergyKwh =
-  activeDayKey === todayKey ? clampNumber(persistedDayState?.dayStartEnergyKwh) : null;
-let todayMaxDemandKw =
-  activeDayKey === todayKey ? clampNumber(persistedDayState?.todayMaxDemandKw) ?? 0 : 0;
+    : null;
+const hasPersistedStateForToday = persistedDayKey === todayKey;
+let activeDayKey = todayKey;
+let dayStartEnergyKwh = hasPersistedStateForToday ? clampNumber(persistedDayState?.dayStartEnergyKwh) : null;
+let todayMaxDemandKw = hasPersistedStateForToday ? clampNumber(persistedDayState?.todayMaxDemandKw) ?? 0 : 0;
 let lastSampleAtMs = 0;
 let lastOutage = null;
 let lastOutageDuration = 0;
-if (activeDayKey === todayKey) {
+if (hasPersistedStateForToday) {
   sensorData = {
     voltage: null,
     current: null,
@@ -575,6 +608,7 @@ function applyIncomingReading(obj) {
   persistTodayState();
 
   syncTodayMetricsToDb().catch((e) => console.error("DB upsert failed:", e.message));
+  dbInsertSampleFromSensor().catch((e) => console.error("Failed to insert energy sample:", e.message));
 
   lastSampleAtMs = Date.now();
 }

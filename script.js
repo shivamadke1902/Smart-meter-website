@@ -60,6 +60,12 @@ function formatDateKey(date) {
   return `${y}-${m}-${d}`;
 }
 
+function parseOptionalNumber(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function shiftDateKey(dateKey, daysDelta) {
   const [y, m, d] = String(dateKey).split("-").map(Number);
   if (!y || !m || !d) return formatDateKey(new Date());
@@ -429,10 +435,10 @@ async function fetchTodayStats() {
     if (!res.ok) return;
     const data = await res.json();
     const dateKey = typeof data?.dateKey === "string" ? data.dateKey : null;
-    const energyKwh   = Number(data?.energyKwh);
-    const maxDemandKw = Number(data?.maxDemandKw);
-    const cost        = Number(data?.todayCost);
-    const carbonFootprintG = Number(data?.carbonFootprintG);
+    const energyKwh = parseOptionalNumber(data?.energyKwh);
+    const maxDemandKw = parseOptionalNumber(data?.maxDemandKw);
+    const cost = parseOptionalNumber(data?.todayCost);
+    const carbonFootprintG = parseOptionalNumber(data?.carbonFootprintG);
 
     // Keep Today metrics sticky for the current day only.
     // Reset exactly when server day changes.
