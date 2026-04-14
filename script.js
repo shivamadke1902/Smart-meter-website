@@ -217,13 +217,8 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
 }
 
 function applyData(data, isStale) {
-  // Prime from /stats/today on load, then keep Today fresh from live API data too.
-  applyTodayMetrics(
-    data?.todayEnergyKwh,
-    data?.todayMaxDemandKw,
-    data?.todayCost,
-    data?.todayCarbonFootprintG
-  );
+  // Keep Today section cumulative and DB-backed so it survives restart/disconnection.
+  applyTodayMetrics(null, null, null, null);
 
   // Update the Today section hint to indicate data source
   if (els.todayHint) {
@@ -503,6 +498,8 @@ async function fetchOnce({ userInitiated = false } = {}) {
   inFlight = true;
 
   try {
+    await fetchTodayStats();
+
     let res = await fetch(apiUrl("/api/data"), { cache: "no-store" });
     if (!res.ok) {
       res = await fetch(apiUrl("/data"), { cache: "no-store" });
