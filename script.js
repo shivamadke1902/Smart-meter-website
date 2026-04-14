@@ -573,6 +573,10 @@ async function fetchOnce({ userInitiated = false } = {}) {
     isStaleReading = Boolean(data?.stale) || ageMs > STALE_MS;
     lastReadingTs = readingTs;
 
+    if (isStaleReading) {
+      await fetchTodayStats();
+    }
+
     applyData(data, isStaleReading);
 
     lastOkAt = Date.now();
@@ -587,6 +591,7 @@ async function fetchOnce({ userInitiated = false } = {}) {
     if (userInitiated) showToast("Updated.");
   } catch (err) {
     // Fetch failed entirely — zero live metrics but keep Today section intact
+    await fetchTodayStats();
     isStaleReading = true;
     setLiveMetricsToZero();
 
