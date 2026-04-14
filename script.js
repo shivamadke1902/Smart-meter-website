@@ -217,8 +217,20 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
 }
 
 function applyData(data, isStale) {
-  // Keep Today section cumulative and DB-backed so it survives restart/disconnection.
-  applyTodayMetrics(null, null, null, null);
+  // Keep Today section cumulative and DB-backed, but if the cache is still empty/zero,
+  // seed it from the live cumulative fields instead of flashing 0.
+  const liveTodayEnergy = parseOptionalNumber(data?.todayEnergyKwh);
+  const shouldSeedTodayFromLive =
+    (!Number.isFinite(cachedToday.energyKwh) || cachedToday.energyKwh <= 0) &&
+    Number.isFinite(liveTodayEnergy) &&
+    liveTodayEnergy > 0;
+
+  applyTodayMetrics(
+    shouldSeedTodayFromLive ? data?.todayEnergyKwh : null,
+    shouldSeedTodayFromLive ? data?.todayMaxDemandKw : null,
+    shouldSeedTodayFromLive ? data?.todayCost : null,
+    shouldSeedTodayFromLive ? data?.todayCarbonFootprintG : null
+  );
 
   // Update the Today section hint to indicate data source
   if (els.todayHint) {
