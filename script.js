@@ -6,6 +6,7 @@ const els = {
   todayEnergy: document.getElementById("todayEnergy"),
   maxDemand: document.getElementById("maxDemand"),
   todayCost: document.getElementById("todayCost"),
+  carbonFootprint: document.getElementById("carbonFootprint"),
   lastOutage: document.getElementById("lastOutage"),
   outageDuration: document.getElementById("outageDuration"),
   statusText: document.getElementById("statusText"),
@@ -40,6 +41,9 @@ const API_BASE = normalizedConfiguredApiBase
   : window.location.hostname.endsWith("github.io")
     ? DEFAULT_API_BASE
     : window.location.origin;
+
+// India grid emission factor — Central Electricity Authority 2023-24 report
+const CO2_GRAMS_PER_KWH = 713;
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -76,7 +80,7 @@ let weekData = [];
 let firstErrorShown = false;
 let debugTick = 0;
 let isStaleReading = false;
-const STALE_MS = 7000; // 2s MCU interval + 2s fetch interval + 3s safety margin
+const STALE_MS = 7000;
 
 function showToast(message) {
   if (!els.toast) return;
@@ -145,10 +149,6 @@ function updateLastUpdated(ts) {
   els.lastUpdated.dateTime = d.toISOString();
 }
 
-// ── FIXED: applyData now takes `isStale` and decides internally.
-// Live metrics (voltage, current, power, pf) are zeroed when stale,
-// written only when the reading is genuinely fresh — all in one atomic step.
-// Cumulative fields (energy, cost, outage) are always applied regardless of staleness.
 function applyData(data, isStale) {
   // Cumulative / historical fields — always show, even when MCU is offline
   setText(els.todayEnergy, fmtNumber(data?.todayEnergyKwh, { maxFrac: 3 }));
@@ -156,6 +156,15 @@ function applyData(data, isStale) {
 
   if (els.todayCost && data?.todayCost != null) {
     els.todayCost.textContent = fmtNumber(data.todayCost, { maxFrac: 2 });
+  }
+
+  // Carbon footprint — derived from today's energy usage
+  if (els.carbonFootprint) {
+    const kwh = data?.todayEnergyKwh;
+    els.carbonFootprint.textContent =
+      kwh != null && Number.isFinite(Number(kwh))
+        ? fmtNumber(Number(kwh) * CO2_GRAMS_PER_KWH, { maxFrac: 0 })
+        : "—";
   }
 
   if (els.lastOutage) {
@@ -176,7 +185,7 @@ function applyData(data, isStale) {
     setText(els.current,     fmtNumber(data?.current,     { maxFrac: 2 }));
     setText(els.power,       fmtNumber(data?.power,       { maxFrac: 1 }));
     setText(els.powerFactor, fmtNumber(data?.powerFactor, { maxFrac: 3 }));
-    updateChart(data); // only push to chart when data is real
+    updateChart(data);
   }
 }
 
@@ -349,8 +358,6 @@ async function fetchWeek() {
   }
 }
 
-// ── FIXED: stale flag is computed BEFORE applyData is called.
-// applyData receives the flag and makes the zero/real decision atomically.
 async function fetchOnce({ userInitiated = false } = {}) {
   if (inFlight) return;
   inFlight = true;
@@ -369,7 +376,6 @@ async function fetchOnce({ userInitiated = false } = {}) {
 
     const ageMs = readingTs > 0 ? Date.now() - readingTs : Number.POSITIVE_INFINITY;
 
-    // Compute stale FIRST — then pass it into applyData so DOM is written correctly in one shot
     isStaleReading = Boolean(data?.stale) || ageMs > STALE_MS;
     lastReadingTs = readingTs;
 
@@ -386,7 +392,6 @@ async function fetchOnce({ userInitiated = false } = {}) {
     }
     if (userInitiated) showToast("Updated.");
   } catch (err) {
-    // Fetch failed entirely — treat as stale immediately
     isStaleReading = true;
     setLiveMetricsToZero();
     setStatus("stale", "Stale data");
@@ -404,9 +409,6 @@ async function fetchOnce({ userInitiated = false } = {}) {
   }
 }
 
-// ── FIXED: watcher runs at 500 ms (was 1000 ms) for faster response.
-// Only acts when isStaleReading is still false but the reading age says otherwise —
-// this closes the gap window between fetch cycles when MCU cuts out mid-poll.
 function startStaleWatcher() {
   window.setInterval(() => {
     if (!lastReadingTs) return;
@@ -421,7 +423,6 @@ function startStaleWatcher() {
 
 els.refreshBtn?.addEventListener("click", () => fetchOnce({ userInitiated: true }));
 
-// Initial load + polling
 initChart();
 initWeekChart();
 fetchWeek();
