@@ -293,6 +293,7 @@ if (activeDayKey === todayKey) {
     todayEnergyKwh: clampNumber(persistedDayState?.todayEnergyKwh),
     todayMaxDemandKw,
     todayCost: clampNumber(persistedDayState?.todayCost),
+    todayCarbonFootprintG: clampNumber(persistedDayState?.todayCarbonFootprintG),
     ts: clampNumber(persistedDayState?.ts),
   };
 }
@@ -304,6 +305,7 @@ function persistTodayState() {
     todayEnergyKwh: clampNumber(sensorData?.todayEnergyKwh),
     todayMaxDemandKw,
     todayCost: clampNumber(sensorData?.todayCost),
+    todayCarbonFootprintG: clampNumber(sensorData?.todayCarbonFootprintG),
     ts: clampNumber(sensorData?.ts),
   });
 }
@@ -407,6 +409,7 @@ app.post("/admin/reset-today", (req, res) => {
     todayEnergyKwh: null,
     todayMaxDemandKw: 0,
     todayCost: null,
+    todayCarbonFootprintG: null,
     ts: null,
   };
 
@@ -422,6 +425,31 @@ app.get("/api/data", (req, res) => {
 
 const COST_PER_KWH = 7;
 const CO2_GRAMS_PER_KWH = 0.8;
+
+function buildTodayDbEntry() {
+  const energyKwh = clampNumber(sensorData?.todayEnergyKwh);
+  if (energyKwh == null) return null;
+
+  const maxDemandKw = clampNumber(sensorData?.todayMaxDemandKw) ?? clampNumber(todayMaxDemandKw);
+  const todayCost =
+    clampNumber(sensorData?.todayCost) ?? energyKwh * COST_PER_KWH;
+  const carbonFootprintG =
+    clampNumber(sensorData?.todayCarbonFootprintG) ?? energyKwh * CO2_GRAMS_PER_KWH;
+
+  return {
+    dateKey: activeDayKey,
+    energyKwh,
+    maxDemandKw: maxDemandKw ?? 0,
+    todayCost: todayCost ?? 0,
+    carbonFootprintG: carbonFootprintG ?? 0,
+  };
+}
+
+async function syncTodayMetricsToDb() {
+  const entry = buildTodayDbEntry();
+  if (!entry) return;
+  await dbUpsertDay(entry);
+}
 
 function rolloverIfNeeded(now = new Date()) {
   const k = dayKey(now);
@@ -506,15 +534,7 @@ function applyIncomingReading(obj) {
   };
   persistTodayState();
 
-  if (todayEnergyKwh != null) {
-    dbUpsertDay({
-      dateKey: activeDayKey,
-      energyKwh: todayEnergyKwh,
-      maxDemandKw: todayMaxDemandKw ?? 0,
-      todayCost: todayCost ?? 0,
-      carbonFootprintG: todayCarbonFootprintG ?? 0,
-    }).catch((e) => console.error("DB upsert failed:", e.message));
-  }
+  syncTodayMetricsToDb().catch((e) => console.error("DB upsert failed:", e.message));
 
   lastSampleAtMs = Date.now();
 }
@@ -632,6 +652,8 @@ app.listen(PORT, "0.0.0.0", () => {
     } else {
       console.log("Neon connected (no history rows yet).");
     }
+
+    await syncTodayMetricsToDb();
 
     // Start periodic sample logging every 2 minutes
     setInterval(() => {
