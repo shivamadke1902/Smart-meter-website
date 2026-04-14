@@ -44,7 +44,7 @@ const API_BASE = normalizedConfiguredApiBase
     : window.location.origin;
 
 // India grid emission factor — Central Electricity Authority 2023-24 report
-const CO2_GRAMS_PER_KWH = 713;
+const CO2_GRAMS_PER_KWH = 0.8;
 
 // Cost per kWh in rupees (must match server.js)
 const COST_PER_KWH = 7;

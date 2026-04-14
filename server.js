@@ -76,8 +76,12 @@ async function ensureDbSchema() {
       current double precision,
       power_w double precision,
       energy_kwh double precision,
-      power_factor double precision
+      power_factor double precision,
+      carbon_footprint_g double precision
     );
+
+    ALTER TABLE energy_samples
+      ADD COLUMN IF NOT EXISTS carbon_footprint_g double precision;
   `);
 }
 
@@ -103,12 +107,14 @@ async function dbInsertSampleFromSensor() {
   if (!pool) return;
   if (!sensorData || Object.keys(sensorData).length === 0) return;
 
-  const { voltage, current, power, energy, powerFactor } = sensorData;
+  const { voltage, current, power, energy, powerFactor, todayEnergyKwh } = sensorData;
+  const sampleCarbonFootprintG =
+    clampNumber(todayEnergyKwh) != null ? clampNumber(todayEnergyKwh) * CO2_GRAMS_PER_KWH : null;
 
   await pool.query(
     `
-    INSERT INTO energy_samples (ts, voltage, current, power_w, energy_kwh, power_factor)
-    VALUES (to_timestamp($1 / 1000.0), $2, $3, $4, $5, $6);
+    INSERT INTO energy_samples (ts, voltage, current, power_w, energy_kwh, power_factor, carbon_footprint_g)
+    VALUES (to_timestamp($1 / 1000.0), $2, $3, $4, $5, $6, $7);
   `,
     [
       sensorData.ts ?? Date.now(),
@@ -117,6 +123,7 @@ async function dbInsertSampleFromSensor() {
       clampNumber(power),
       clampNumber(energy),
       clampNumber(powerFactor),
+      sampleCarbonFootprintG,
     ]
   );
 }
@@ -414,7 +421,7 @@ app.get("/api/data", (req, res) => {
 });
 
 const COST_PER_KWH = 7;
-const CO2_GRAMS_PER_KWH = 713;
+const CO2_GRAMS_PER_KWH = 0.8;
 
 function rolloverIfNeeded(now = new Date()) {
   const k = dayKey(now);
