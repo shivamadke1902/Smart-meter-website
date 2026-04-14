@@ -59,8 +59,15 @@ async function ensureDbSchema() {
       date_key text PRIMARY KEY,
       energy_kwh double precision NOT NULL DEFAULT 0,
       max_demand_kw double precision NOT NULL DEFAULT 0,
+      today_cost double precision NOT NULL DEFAULT 0,
+      carbon_footprint_g double precision NOT NULL DEFAULT 0,
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE energy_daily
+      ADD COLUMN IF NOT EXISTS today_cost double precision NOT NULL DEFAULT 0;
+    ALTER TABLE energy_daily
+      ADD COLUMN IF NOT EXISTS carbon_footprint_g double precision NOT NULL DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS energy_samples (
       id bigserial PRIMARY KEY,
@@ -74,19 +81,21 @@ async function ensureDbSchema() {
   `);
 }
 
-async function dbUpsertDay({ dateKey, energyKwh, maxDemandKw }) {
+async function dbUpsertDay({ dateKey, energyKwh, maxDemandKw, todayCost, carbonFootprintG }) {
   if (!pool) return;
   await pool.query(
     `
-    INSERT INTO energy_daily (date_key, energy_kwh, max_demand_kw, updated_at)
-    VALUES ($1, $2, $3, now())
+    INSERT INTO energy_daily (date_key, energy_kwh, max_demand_kw, today_cost, carbon_footprint_g, updated_at)
+    VALUES ($1, $2, $3, $4, $5, now())
     ON CONFLICT (date_key)
     DO UPDATE SET
       energy_kwh = EXCLUDED.energy_kwh,
       max_demand_kw = GREATEST(energy_daily.max_demand_kw, EXCLUDED.max_demand_kw),
+      today_cost = EXCLUDED.today_cost,
+      carbon_footprint_g = EXCLUDED.carbon_footprint_g,
       updated_at = now();
   `,
-    [dateKey, energyKwh, maxDemandKw]
+    [dateKey, energyKwh, maxDemandKw, todayCost, carbonFootprintG]
   );
 }
 
@@ -118,12 +127,33 @@ async function dbReadDailyHistory() {
     `
     SELECT date_key as "dateKey",
            energy_kwh as "energyKwh",
-           max_demand_kw as "maxDemandKw"
+           max_demand_kw as "maxDemandKw",
+           today_cost as "todayCost",
+           carbon_footprint_g as "carbonFootprintG"
     FROM energy_daily
     ORDER BY date_key ASC;
   `
   );
   return rows;
+}
+
+async function dbReadTodayStats(dateKey) {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `
+    SELECT date_key as "dateKey",
+           energy_kwh as "energyKwh",
+           max_demand_kw as "maxDemandKw",
+           today_cost as "todayCost",
+           carbon_footprint_g as "carbonFootprintG",
+           updated_at as "updatedAt"
+    FROM energy_daily
+    WHERE date_key = $1
+    LIMIT 1;
+  `,
+    [dateKey]
+  );
+  return rows[0] ?? null;
 }
 
 // Aggregate all days from the high-frequency samples table
@@ -384,6 +414,7 @@ app.get("/api/data", (req, res) => {
 });
 
 const COST_PER_KWH = 7;
+const CO2_GRAMS_PER_KWH = 713;
 
 function rolloverIfNeeded(now = new Date()) {
   const k = dayKey(now);
@@ -447,6 +478,8 @@ function applyIncomingReading(obj) {
     energyKwh != null && dayStartEnergyKwh != null ? Math.max(0, energyKwh - dayStartEnergyKwh) : null;
   const todayCost =
     todayEnergyKwh != null ? todayEnergyKwh * COST_PER_KWH : null;
+  const todayCarbonFootprintG =
+    todayEnergyKwh != null ? todayEnergyKwh * CO2_GRAMS_PER_KWH : null;
 
   sensorData = {
     voltage,
@@ -457,9 +490,18 @@ function applyIncomingReading(obj) {
     todayEnergyKwh,
     todayMaxDemandKw,
     todayCost,
+    todayCarbonFootprintG,
     ts: Date.now(),
   };
   persistTodayState();
+
+  dbUpsertDay({
+    dateKey: activeDayKey,
+    energyKwh: todayEnergyKwh ?? 0,
+    maxDemandKw: todayMaxDemandKw ?? 0,
+    todayCost: todayCost ?? 0,
+    carbonFootprintG: todayCarbonFootprintG ?? 0,
+  }).catch((e) => console.error("DB upsert failed:", e.message));
 
   lastSampleAtMs = Date.now();
 }
@@ -473,13 +515,38 @@ app.get("/data", (req, res) => {
 });
 
 app.get("/stats/today", (req, res) => {
-  res.json({
-    dateKey: activeDayKey,
-    energyKwh: sensorData?.todayEnergyKwh ?? null,
-    maxDemandKw: sensorData?.todayMaxDemandKw ?? 0,
-    todayCost: sensorData?.todayCost ?? null,
-    ts: sensorData?.ts ?? null,
-  });
+  (async () => {
+    try {
+      const dbToday = await dbReadTodayStats(activeDayKey);
+      if (dbToday) {
+        return res.json({
+          dateKey: dbToday.dateKey,
+          energyKwh: clampNumber(dbToday.energyKwh) ?? 0,
+          maxDemandKw: clampNumber(dbToday.maxDemandKw) ?? 0,
+          todayCost: clampNumber(dbToday.todayCost) ?? 0,
+          carbonFootprintG: clampNumber(dbToday.carbonFootprintG) ?? 0,
+          ts: dbToday.updatedAt ? new Date(dbToday.updatedAt).getTime() : sensorData?.ts ?? null,
+        });
+      }
+    } catch (e) {
+      console.error("Failed to read /stats/today from DB:", e.message);
+    }
+
+    // fallback when DB is unavailable or row is not present yet
+    const fallbackEnergy = sensorData?.todayEnergyKwh ?? null;
+    const fallbackCost = sensorData?.todayCost ?? null;
+    const fallbackCarbon =
+      fallbackEnergy != null ? fallbackEnergy * CO2_GRAMS_PER_KWH : null;
+
+    res.json({
+      dateKey: activeDayKey,
+      energyKwh: fallbackEnergy,
+      maxDemandKw: sensorData?.todayMaxDemandKw ?? 0,
+      todayCost: fallbackCost,
+      carbonFootprintG: fallbackCarbon,
+      ts: sensorData?.ts ?? null,
+    });
+  })();
 });
 
 app.get("/stats/week", (req, res) => {

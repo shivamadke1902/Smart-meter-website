@@ -93,6 +93,7 @@ let cachedToday = {
   energyKwh: null,
   maxDemandKw: null,
   cost: null,
+  carbonFootprintG: null,
 };
 
 function showToast(message) {
@@ -165,7 +166,7 @@ function updateLastUpdated(ts) {
 // Render the Today section using whichever values are available.
 // Priority: live data fields from the polling response > cachedToday from /stats/today.
 // This ensures the section is never blank even when the MCU is offline.
-function applyTodayMetrics(energyKwh, maxDemandKw, cost) {
+function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
   // Resolve: use provided value if valid, else fall back to cache
   const resolvedEnergy   = Number.isFinite(Number(energyKwh))   ? Number(energyKwh)   : cachedToday.energyKwh;
   const resolvedDemand   = Number.isFinite(Number(maxDemandKw))  ? Number(maxDemandKw) : cachedToday.maxDemandKw;
@@ -179,31 +180,36 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost) {
     resolvedCost = cachedToday.cost;
   }
 
+  let resolvedCarbon = Number.isFinite(Number(carbonFootprintG)) ? Number(carbonFootprintG) : null;
+  if (resolvedCarbon === null && resolvedEnergy !== null) {
+    resolvedCarbon = resolvedEnergy * CO2_GRAMS_PER_KWH;
+  }
+  if (resolvedCarbon === null) {
+    resolvedCarbon = cachedToday.carbonFootprintG;
+  }
+
   // Update cache with whatever we resolved (only overwrite with real values)
   if (Number.isFinite(resolvedEnergy))  cachedToday.energyKwh   = resolvedEnergy;
   if (Number.isFinite(resolvedDemand))  cachedToday.maxDemandKw = resolvedDemand;
   if (Number.isFinite(resolvedCost))    cachedToday.cost        = resolvedCost;
+  if (Number.isFinite(resolvedCarbon))  cachedToday.carbonFootprintG = resolvedCarbon;
 
   setText(els.todayEnergy, fmtNumber(cachedToday.energyKwh,   { maxFrac: 3 }));
   setText(els.maxDemand,   fmtNumber(cachedToday.maxDemandKw, { maxFrac: 3 }));
   setText(els.todayCost,   fmtNumber(cachedToday.cost,        { maxFrac: 2 }));
 
-  // Carbon footprint derived from best available energy figure
+  // Carbon footprint from DB/cache (fallback derives from energy if missing)
   if (els.carbonFootprint) {
     els.carbonFootprint.textContent =
-      cachedToday.energyKwh !== null
-        ? fmtNumber(cachedToday.energyKwh * CO2_GRAMS_PER_KWH, { maxFrac: 0 })
+      cachedToday.carbonFootprintG !== null
+        ? fmtNumber(cachedToday.carbonFootprintG, { maxFrac: 0 })
         : "—";
   }
 }
 
 function applyData(data, isStale) {
   // Always attempt to render Today metrics, using live fields or cache fallback
-  applyTodayMetrics(
-    data?.todayEnergyKwh,
-    data?.todayMaxDemandKw,
-    data?.todayCost
-  );
+  applyTodayMetrics(data?.todayEnergyKwh, data?.todayMaxDemandKw, data?.todayCost, data?.todayCarbonFootprintG);
 
   // Update the Today section hint to indicate data source
   if (els.todayHint) {
@@ -414,6 +420,7 @@ async function fetchTodayStats() {
     const energyKwh   = Number(data?.energyKwh);
     const maxDemandKw = Number(data?.maxDemandKw);
     const cost        = Number(data?.todayCost);
+    const carbonFootprintG = Number(data?.carbonFootprintG);
 
     // Only seed cache — do not overwrite values that applyData may have already set
     if (Number.isFinite(energyKwh)   && cachedToday.energyKwh   === null) cachedToday.energyKwh   = energyKwh;
@@ -423,9 +430,14 @@ async function fetchTodayStats() {
     } else if (cachedToday.cost === null && Number.isFinite(energyKwh)) {
       cachedToday.cost = energyKwh * COST_PER_KWH;
     }
+    if (Number.isFinite(carbonFootprintG) && cachedToday.carbonFootprintG === null) {
+      cachedToday.carbonFootprintG = carbonFootprintG;
+    } else if (cachedToday.carbonFootprintG === null && Number.isFinite(energyKwh)) {
+      cachedToday.carbonFootprintG = energyKwh * CO2_GRAMS_PER_KWH;
+    }
 
     // Render immediately with whatever we seeded
-    applyTodayMetrics(null, null, null);
+    applyTodayMetrics(null, null, null, null);
   } catch {
     // silent; non-critical bootstrap fetch
   }
@@ -436,6 +448,8 @@ async function fetchOnce({ userInitiated = false } = {}) {
   inFlight = true;
 
   try {
+    await fetchTodayStats();
+
     let res = await fetch(apiUrl("/api/data"), { cache: "no-store" });
     if (!res.ok) {
       res = await fetch(apiUrl("/data"), { cache: "no-store" });
