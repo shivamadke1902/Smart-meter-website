@@ -503,8 +503,6 @@ async function fetchOnce({ userInitiated = false } = {}) {
   inFlight = true;
 
   try {
-    await fetchTodayStats();
-
     let res = await fetch(apiUrl("/api/data"), { cache: "no-store" });
     if (!res.ok) {
       res = await fetch(apiUrl("/data"), { cache: "no-store" });
