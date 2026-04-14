@@ -16,6 +16,7 @@ const els = {
   refreshBtn: document.getElementById("refreshBtn"),
   metricsHint: document.getElementById("metricsHint"),
   todayHint: document.getElementById("todayHint"),
+  todayComparison: document.getElementById("todayComparison"),
   toast: document.getElementById("toast"),
   chartCanvas: document.getElementById("metricsChart"),
   weekChartCanvas: document.getElementById("weekChart"),
@@ -104,6 +105,7 @@ let cachedToday = {
   carbonFootprintG: null,
 };
 let cachedTodayDateKey = null;
+let previousDayEnergyKwh = null;
 
 function showToast(message) {
   if (!els.toast) return;
@@ -214,6 +216,44 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
         ? fmtNumber(cachedToday.carbonFootprintG, { maxFrac: 3 })
         : "—";
   }
+
+  updateTodayComparison();
+}
+
+function updateTodayComparison() {
+  if (!els.todayComparison) return;
+
+  const todayEnergy = cachedToday.energyKwh;
+  const yesterdayEnergy = previousDayEnergyKwh;
+
+  if (!Number.isFinite(todayEnergy)) {
+    els.todayComparison.textContent = "Today’s comparison will appear once cumulative energy is available.";
+    return;
+  }
+
+  if (!Number.isFinite(yesterdayEnergy)) {
+    els.todayComparison.textContent = "Previous-day comparison unavailable.";
+    return;
+  }
+
+  if (yesterdayEnergy === 0) {
+    els.todayComparison.textContent =
+      todayEnergy === 0
+        ? "Load is unchanged from yesterday at 0%."
+        : "Yesterday’s energy use was 0 kWh, so a percentage comparison is unavailable.";
+    return;
+  }
+
+  const deltaPct = ((todayEnergy - yesterdayEnergy) / yesterdayEnergy) * 100;
+  const absDeltaPct = Math.abs(deltaPct);
+
+  if (absDeltaPct < 0.05) {
+    els.todayComparison.textContent = "Load is nearly unchanged versus yesterday.";
+    return;
+  }
+
+  const direction = deltaPct > 0 ? "up" : "down";
+  els.todayComparison.textContent = `Load is ${direction} ${fmtNumber(absDeltaPct, { maxFrac: 2 })}% vs yesterday.`;
 }
 
 function applyData(data, isStale) {
@@ -403,7 +443,7 @@ async function fetchWeek() {
     const byKey = new Map();
     for (const d of days) {
       if (!d || typeof d.dateKey !== "string") continue;
-      byKey.set(d.dateKey, Number(d?.energyKwh) || 0);
+      byKey.set(d.dateKey, parseOptionalNumber(d?.energyKwh));
     }
 
     const todayKey = formatDateKey(new Date());
@@ -419,6 +459,8 @@ async function fetchWeek() {
       weekLabels.push(dateKey.slice(5));
       weekData.push(byKey.get(dateKey) ?? 0);
     }
+    previousDayEnergyKwh = byKey.get(shiftDateKey(todayKey, -1)) ?? null;
+    updateTodayComparison();
     weekChart?.update("none");
   } catch {
     // silent; weekly view is non-critical
