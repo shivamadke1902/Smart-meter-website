@@ -211,7 +211,7 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
   if (els.carbonFootprint) {
     els.carbonFootprint.textContent =
       cachedToday.carbonFootprintG !== null
-        ? fmtNumber(cachedToday.carbonFootprintG, { maxFrac: 0 })
+        ? fmtNumber(cachedToday.carbonFootprintG, { maxFrac: 3 })
         : "—";
   }
 }
