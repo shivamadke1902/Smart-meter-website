@@ -217,9 +217,13 @@ function applyTodayMetrics(energyKwh, maxDemandKw, cost, carbonFootprintG) {
 }
 
 function applyData(data, isStale) {
-  // Keep Today section DB-backed only (seeded by /stats/today in fetchTodayStats)
-  // so values do not bounce with /api/data poll responses.
-  applyTodayMetrics(null, null, null, null);
+  // Prime from /stats/today on load, then keep Today fresh from live API data too.
+  applyTodayMetrics(
+    data?.todayEnergyKwh,
+    data?.todayMaxDemandKw,
+    data?.todayCost,
+    data?.todayCarbonFootprintG
+  );
 
   // Update the Today section hint to indicate data source
   if (els.todayHint) {
