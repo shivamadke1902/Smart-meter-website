@@ -446,6 +446,27 @@ async function fetchTodayStats() {
     }
     if (dateKey) cachedTodayDateKey = dateKey;
 
+    const serverLooksAllZero =
+      Number.isFinite(energyKwh) &&
+      Number.isFinite(maxDemandKw) &&
+      Number.isFinite(cost) &&
+      Number.isFinite(carbonFootprintG) &&
+      energyKwh === 0 &&
+      maxDemandKw === 0 &&
+      cost === 0 &&
+      carbonFootprintG === 0;
+    const cacheHasNonZeroForSameDay =
+      (Number.isFinite(cachedToday.energyKwh) && cachedToday.energyKwh > 0) ||
+      (Number.isFinite(cachedToday.maxDemandKw) && cachedToday.maxDemandKw > 0) ||
+      (Number.isFinite(cachedToday.cost) && cachedToday.cost > 0) ||
+      (Number.isFinite(cachedToday.carbonFootprintG) && cachedToday.carbonFootprintG > 0);
+
+    // Prevent same-day flicker/reset when backend temporarily serves a zero row.
+    if (serverLooksAllZero && cacheHasNonZeroForSameDay) {
+      applyTodayMetrics(null, null, null, null);
+      return;
+    }
+
     // Keep cache synced with DB-backed /stats/today values
     if (Number.isFinite(energyKwh)) cachedToday.energyKwh = energyKwh;
     if (Number.isFinite(maxDemandKw)) cachedToday.maxDemandKw = maxDemandKw;
