@@ -118,8 +118,11 @@ async function dbInsertSampleFromSensor() {
 
   const { voltage, current, power, energy, powerFactor, todayEnergyKwh, todayMaxDemandKw, todayCost } =
     sensorData;
-  const sampleCarbonFootprintG =
-    clampNumber(todayEnergyKwh) != null ? clampNumber(todayEnergyKwh) * CO2_GRAMS_PER_KWH : null;
+  const sampleEnergyUsed = clampNumber(todayEnergyKwh);
+  const sampleMaxDemand = clampNumber(todayMaxDemandKw);
+  const sampleTodayCost = clampNumber(todayCost);
+  const sampleCarbonFootprint =
+    sampleEnergyUsed != null ? sampleEnergyUsed * CO2_GRAMS_PER_KWH : null;
 
   await pool.query(
     `
@@ -136,10 +139,10 @@ async function dbInsertSampleFromSensor() {
       clampNumber(power),
       clampNumber(energy),
       clampNumber(powerFactor),
-      clampNumber(todayEnergyKwh),
-      clampNumber(todayMaxDemandKw),
-      clampNumber(todayCost),
-      sampleCarbonFootprintG,
+      sampleEnergyUsed,
+      sampleMaxDemand,
+      sampleTodayCost,
+      sampleCarbonFootprint,
     ]
   );
 }
@@ -531,10 +534,31 @@ function applyIncomingReading(obj) {
 
   const todayEnergyKwh =
     energyKwh != null && dayStartEnergyKwh != null ? Math.max(0, energyKwh - dayStartEnergyKwh) : null;
+  const payloadEnergyUsed =
+    clampNumber(obj?.energy_used) ?? clampNumber(obj?.energyUsed) ?? clampNumber(obj?.todayEnergyKwh);
+  const payloadMaxDemand =
+    clampNumber(obj?.maximum_demand) ?? clampNumber(obj?.maximumDemand) ?? clampNumber(obj?.todayMaxDemandKw);
+  const payloadTodayCost =
+    clampNumber(obj?.cost_today) ?? clampNumber(obj?.costToday) ?? clampNumber(obj?.todayCost);
+  const payloadCarbonFootprint =
+    clampNumber(obj?.carbon_footprint) ??
+    clampNumber(obj?.carbonFootprint) ??
+    clampNumber(obj?.todayCarbonFootprintG);
+
+  const resolvedTodayEnergyKwh = payloadEnergyUsed != null ? payloadEnergyUsed : todayEnergyKwh;
+  const resolvedTodayMaxDemandKw = payloadMaxDemand != null ? payloadMaxDemand : todayMaxDemandKw;
   const todayCost =
-    todayEnergyKwh != null ? todayEnergyKwh * COST_PER_KWH : null;
+    payloadTodayCost != null
+      ? payloadTodayCost
+      : resolvedTodayEnergyKwh != null
+        ? resolvedTodayEnergyKwh * COST_PER_KWH
+        : null;
   const todayCarbonFootprintG =
-    todayEnergyKwh != null ? todayEnergyKwh * CO2_GRAMS_PER_KWH : null;
+    payloadCarbonFootprint != null
+      ? payloadCarbonFootprint
+      : resolvedTodayEnergyKwh != null
+        ? resolvedTodayEnergyKwh * CO2_GRAMS_PER_KWH
+        : null;
 
   sensorData = {
     voltage,
@@ -542,8 +566,8 @@ function applyIncomingReading(obj) {
     power: powerW,
     energy: energyKwh, // cumulative (as received from MCU)
     powerFactor,
-    todayEnergyKwh,
-    todayMaxDemandKw,
+    todayEnergyKwh: resolvedTodayEnergyKwh,
+    todayMaxDemandKw: resolvedTodayMaxDemandKw,
     todayCost,
     todayCarbonFootprintG,
     ts: Date.now(),
