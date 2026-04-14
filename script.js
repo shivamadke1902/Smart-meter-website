@@ -15,6 +15,7 @@ const els = {
   lastUpdated: document.getElementById("lastUpdated"),
   refreshBtn: document.getElementById("refreshBtn"),
   metricsHint: document.getElementById("metricsHint"),
+  todayHint: document.getElementById("todayHint"),
   toast: document.getElementById("toast"),
   chartCanvas: document.getElementById("metricsChart"),
   weekChartCanvas: document.getElementById("weekChart"),
@@ -44,6 +45,9 @@ const API_BASE = normalizedConfiguredApiBase
 
 // India grid emission factor — Central Electricity Authority 2023-24 report
 const CO2_GRAMS_PER_KWH = 713;
+
+// Cost per kWh in rupees (must match server.js)
+const COST_PER_KWH = 7;
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -81,6 +85,15 @@ let firstErrorShown = false;
 let debugTick = 0;
 let isStaleReading = false;
 const STALE_MS = 7000;
+
+// In-memory cache of the last known good Today values.
+// Populated from /stats/today on load and kept current by applyData.
+// Used to re-render the Today section whenever live data fields are null.
+let cachedToday = {
+  energyKwh: null,
+  maxDemandKw: null,
+  cost: null,
+};
 
 function showToast(message) {
   if (!els.toast) return;
@@ -149,22 +162,54 @@ function updateLastUpdated(ts) {
   els.lastUpdated.dateTime = d.toISOString();
 }
 
-function applyData(data, isStale) {
-  // Cumulative / historical fields — always show, even when MCU is offline
-  setText(els.todayEnergy, fmtNumber(data?.todayEnergyKwh, { maxFrac: 3 }));
-  setText(els.maxDemand,   fmtNumber(data?.todayMaxDemandKw, { maxFrac: 3 }));
+// Render the Today section using whichever values are available.
+// Priority: live data fields from the polling response > cachedToday from /stats/today.
+// This ensures the section is never blank even when the MCU is offline.
+function applyTodayMetrics(energyKwh, maxDemandKw, cost) {
+  // Resolve: use provided value if valid, else fall back to cache
+  const resolvedEnergy   = Number.isFinite(Number(energyKwh))   ? Number(energyKwh)   : cachedToday.energyKwh;
+  const resolvedDemand   = Number.isFinite(Number(maxDemandKw))  ? Number(maxDemandKw) : cachedToday.maxDemandKw;
 
-  if (els.todayCost && data?.todayCost != null) {
-    els.todayCost.textContent = fmtNumber(data.todayCost, { maxFrac: 2 });
+  // Cost: derive from energy if not directly provided (matches server logic)
+  let resolvedCost = Number.isFinite(Number(cost)) ? Number(cost) : null;
+  if (resolvedCost === null && resolvedEnergy !== null) {
+    resolvedCost = resolvedEnergy * COST_PER_KWH;
+  }
+  if (resolvedCost === null) {
+    resolvedCost = cachedToday.cost;
   }
 
-  // Carbon footprint — derived from today's energy usage
+  // Update cache with whatever we resolved (only overwrite with real values)
+  if (Number.isFinite(resolvedEnergy))  cachedToday.energyKwh   = resolvedEnergy;
+  if (Number.isFinite(resolvedDemand))  cachedToday.maxDemandKw = resolvedDemand;
+  if (Number.isFinite(resolvedCost))    cachedToday.cost        = resolvedCost;
+
+  setText(els.todayEnergy, fmtNumber(cachedToday.energyKwh,   { maxFrac: 3 }));
+  setText(els.maxDemand,   fmtNumber(cachedToday.maxDemandKw, { maxFrac: 3 }));
+  setText(els.todayCost,   fmtNumber(cachedToday.cost,        { maxFrac: 2 }));
+
+  // Carbon footprint derived from best available energy figure
   if (els.carbonFootprint) {
-    const kwh = data?.todayEnergyKwh;
     els.carbonFootprint.textContent =
-      kwh != null && Number.isFinite(Number(kwh))
-        ? fmtNumber(Number(kwh) * CO2_GRAMS_PER_KWH, { maxFrac: 0 })
+      cachedToday.energyKwh !== null
+        ? fmtNumber(cachedToday.energyKwh * CO2_GRAMS_PER_KWH, { maxFrac: 0 })
         : "—";
+  }
+}
+
+function applyData(data, isStale) {
+  // Always attempt to render Today metrics, using live fields or cache fallback
+  applyTodayMetrics(
+    data?.todayEnergyKwh,
+    data?.todayMaxDemandKw,
+    data?.todayCost
+  );
+
+  // Update the Today section hint to indicate data source
+  if (els.todayHint) {
+    els.todayHint.textContent = isStale
+      ? "Showing last known values (MCU offline)"
+      : "Energy used and peak demand (today)";
   }
 
   if (els.lastOutage) {
@@ -358,6 +403,34 @@ async function fetchWeek() {
   }
 }
 
+// Fetch /stats/today from the server once on page load.
+// This primes cachedToday so the Today section shows persisted data
+// immediately, even before the MCU sends its first live reading.
+async function fetchTodayStats() {
+  try {
+    const res = await fetch(apiUrl("/stats/today"), { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const energyKwh   = Number(data?.energyKwh);
+    const maxDemandKw = Number(data?.maxDemandKw);
+    const cost        = Number(data?.todayCost);
+
+    // Only seed cache — do not overwrite values that applyData may have already set
+    if (Number.isFinite(energyKwh)   && cachedToday.energyKwh   === null) cachedToday.energyKwh   = energyKwh;
+    if (Number.isFinite(maxDemandKw) && cachedToday.maxDemandKw === null) cachedToday.maxDemandKw = maxDemandKw;
+    if (Number.isFinite(cost)        && cachedToday.cost         === null) {
+      cachedToday.cost = cost;
+    } else if (cachedToday.cost === null && Number.isFinite(energyKwh)) {
+      cachedToday.cost = energyKwh * COST_PER_KWH;
+    }
+
+    // Render immediately with whatever we seeded
+    applyTodayMetrics(null, null, null);
+  } catch {
+    // silent; non-critical bootstrap fetch
+  }
+}
+
 async function fetchOnce({ userInitiated = false } = {}) {
   if (inFlight) return;
   inFlight = true;
@@ -392,8 +465,16 @@ async function fetchOnce({ userInitiated = false } = {}) {
     }
     if (userInitiated) showToast("Updated.");
   } catch (err) {
+    // Fetch failed entirely — zero live metrics but keep Today section intact
     isStaleReading = true;
     setLiveMetricsToZero();
+
+    // Re-render Today from cache so it stays visible even on total fetch failure
+    applyTodayMetrics(null, null, null);
+    if (els.todayHint) {
+      els.todayHint.textContent = "Showing last known values (MCU offline)";
+    }
+
     setStatus("stale", "Stale data");
     const msg = err instanceof Error ? err.message : "Unable to fetch latest reading";
     if (els.metricsHint) {
@@ -417,14 +498,23 @@ function startStaleWatcher() {
       isStaleReading = true;
       setStatus("stale", "Stale data");
       setLiveMetricsToZero();
+      // Today section keeps its last rendered values — no action needed
+      if (els.todayHint) {
+        els.todayHint.textContent = "Showing last known values (MCU offline)";
+      }
     }
   }, 500);
 }
 
 els.refreshBtn?.addEventListener("click", () => fetchOnce({ userInitiated: true }));
 
+// Boot sequence:
+// 1. Init charts
+// 2. Prime Today cache from /stats/today so values show instantly
+// 3. Start live polling
 initChart();
 initWeekChart();
+fetchTodayStats();   // primes cachedToday before first fetchOnce resolves
 fetchWeek();
 fetchOnce();
 window.setInterval(fetchOnce, 2000);
